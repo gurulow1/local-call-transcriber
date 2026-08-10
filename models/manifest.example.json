@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "name": "T-one",
+  "version": "0.1.0+hf.106f3b0",
+  "source": "https://huggingface.co/t-tech/T-one",
+  "source_revision": "106f3b0b32a9e107eb613312e4ebc61ff3d53926",
+  "source_code": "https://github.com/voicekit-team/T-one",
+  "source_code_revision": "3c5b6c015038173840e62cea99e10cdb1c759116",
+  "license": "Apache-2.0 (declared by the official model card; retain a local copy)",
+  "files": {
+    "model.onnx": {
+      "size_bytes": 144193371,
+      "sha256": "707e4a282d5036304a0b8603ad83945840c3075f53c49911ef88c19bcc5a7d52"
+    },
+    "kenlm.bin": {
+      "size_bytes": 5463477004,
+      "sha256": "8c31a489a51a6e9236112dacb6bed12f45e8df734057615fa6bf220a5a769a1d"
+    }
+  }
+}

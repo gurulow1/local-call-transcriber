@@ -1,0 +1,6 @@
+;; Test-only macOS sandbox profile. Production must use centrally managed
+;; firewall/egress controls for the service identity and host/network segment.
+(version 1)
+(allow default)
+(deny network*)
+

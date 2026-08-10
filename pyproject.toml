@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-call-transcriber"
+version = "0.1.0"
+description = "Fail-closed local CLI wrapper for T-one call transcription"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "Proprietary project wrapper; see third-party notices before distribution"}
+dependencies = []
+
+[project.optional-dependencies]
+audio = ["miniaudio==1.61"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
