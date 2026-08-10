@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence
 
+from .audio import read_local_audio
 from .errors import (
     AudioDecodeError,
     DependencyUnavailableError,
@@ -111,7 +112,7 @@ class ToneEngine:
                 )
             except Exception as exc:
                 raise ModelValidationError(f"Cannot load local T-one model: {exc}") from exc
-            self._read_audio = read_audio
+            self._read_audio = lambda path: read_local_audio(path, fallback=read_audio)
 
     def transcribe(self, input_path: Path) -> EngineResult:
         self._load()
@@ -120,6 +121,8 @@ class ToneEngine:
         with deny_python_network():
             try:
                 audio = self._read_audio(input_path)
+            except (AudioDecodeError, DependencyUnavailableError):
+                raise
             except Exception as exc:
                 raise AudioDecodeError(f"Cannot decode source audio: {exc}") from exc
             try:

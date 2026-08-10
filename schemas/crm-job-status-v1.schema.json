@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:local-call-transcriber:crm-job-status:1.0",
+  "title": "CRM transcription job status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "call_id",
+    "status",
+    "attempts",
+    "max_attempts",
+    "created_at",
+    "updated_at",
+    "completed_at",
+    "result_url",
+    "error"
+  ],
+  "properties": {
+    "api_version": {"const": "1.0"},
+    "call_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+    },
+    "status": {
+      "enum": ["new", "queued", "processing", "completed", "failed"]
+    },
+    "attempts": {"type": "integer", "minimum": 0},
+    "max_attempts": {
+      "oneOf": [
+        {"type": "integer", "minimum": 1},
+        {"type": "null"}
+      ]
+    },
+    "created_at": {
+      "oneOf": [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"}
+      ]
+    },
+    "updated_at": {
+      "oneOf": [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"}
+      ]
+    },
+    "completed_at": {
+      "oneOf": [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"}
+      ]
+    },
+    "result_url": {
+      "oneOf": [
+        {"type": "string", "pattern": "^/v1/jobs/.+/result$"},
+        {"type": "null"}
+      ]
+    },
+    "error": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "message"],
+          "properties": {
+            "type": {"type": "string", "minLength": 1, "maxLength": 100},
+            "message": {"type": "string", "maxLength": 500}
+          }
+        }
+      ]
+    }
+  }
+}

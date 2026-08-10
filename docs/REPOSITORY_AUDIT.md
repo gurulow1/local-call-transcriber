@@ -92,6 +92,7 @@ Upstream Dockerfile дополнительно:
 - **onnxruntime 1.19.2/1.22.0 по маркерам Python:** нативный wheel, execution providers, third-party notices, CVE и потребление потоков/памяти.
 - **huggingface-hub 0.33.0, requests, urllib3, hf-xet:** сетевые возможности, telemetry/offline flags; runtime они не нужны для загрузки локального файла, но импортируются upstream.
 - **miniaudio 1.61 (demo extra):** нативное декодирование недоверенного аудио; fuzz/CVE и допустимые форматы.
+- **PyAV 18.0.0 (optional AAC):** BSD-3-Clause Python wrapper с бундлом FFmpeg; wheel зафиксирован SHA-256, но нужны SCA/CVE и отдельный аудит транзитивных лицензий FFmpeg.
 - **NumPy, protobuf, sympy, pyyaml, fsspec и прочие locked packages:** SCA, лицензии и hashes.
 - Extra `finetune` (Torch, Transformers, datasets и др.) не нужен и не должен устанавливаться в runtime.
 - Dev/demo web-зависимости не нужны для CLI, кроме miniaudio как аудио-декодера; желательно отделить его от полного web extra.
@@ -113,11 +114,11 @@ Upstream Dockerfile дополнительно:
 
 ### 13. Какие форматы аудио поддерживаются?
 
-README заявляет `.wav`, `.mp3`, `.flac`, `.ogg`. Реализация `read_audio()` использует `miniaudio.decode_file()`, сводит каналы в mono и ресемплирует в signed 16-bit 8 кГц (`tone/demo/read_audio.py:21-51`). Фактическую матрицу контейнер/кодек нужно проверить тестами; расширение само по себе не гарантирует декодирование.
+Upstream README заявляет `.wav`, `.mp3`, `.flac`, `.ogg`. Их `read_audio()` использует `miniaudio.decode_file()`, сводит каналы в mono и ресемплирует в signed 16-bit 8 кГц (`tone/demo/read_audio.py:21-51`). Обвязка проекта добавляет `.aac` ADTS через локальный PyAV 18.0.0, также сводя в mono signed 16-bit 8 кГц. Синтетический AAC и фактический AAC v2 LC декодированы локально; полная матрица профилей AAC не заявляется.
 
 ### 14. Требуется ли FFmpeg?
 
-Для показанного inference/demo пути — нет: используется miniaudio. FFmpeg упоминается только в комментарии к optional dependency `datasets` для fine-tuning. Выбранный CLI не должен зависеть от FFmpeg, пока тест форматов не докажет необходимость.
+Для WAV/MP3/FLAC/OGG — нет: используется miniaudio. Для запрошенного AAC добавлен optional PyAV wheel с бундлом FFmpeg. Runtime открывает только ранее проверенный локальный regular-file path в формате AAC, не принимает URL и не скачивает кодеки.
 
 ### 15. Поддерживаются ли длинные аудиофайлы?
 

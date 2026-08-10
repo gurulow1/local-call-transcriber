@@ -30,3 +30,6 @@ class AudioDecodeError(TranscriberError):
 class InferenceError(TranscriberError):
     """The local ASR engine failed to produce a result."""
 
+
+class PostprocessingConfigError(TranscriberError):
+    """The local deterministic postprocessing configuration is invalid."""

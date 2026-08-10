@@ -1,0 +1,183 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Local Call Transcriber Reference API",
+    "version": "1.0.0",
+    "description": "Loopback-only reference contract. Production authentication, TLS and network placement are intentionally not defined."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8765",
+      "description": "Local reference server only"
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "HTTP adapter is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["api_version", "service", "status"],
+                  "properties": {
+                    "api_version": {"const": "1.0"},
+                    "service": {"const": "local-call-transcriber"},
+                    "status": {"const": "ok"}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/{call_id}/audio.{extension}": {
+      "put": {
+        "operationId": "uploadAudio",
+        "parameters": [
+          {"$ref": "#/components/parameters/CallId"},
+          {
+            "name": "extension",
+            "in": "path",
+            "required": true,
+            "schema": {"enum": ["wav", "mp3", "flac", "ogg", "aac"]}
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "audio/wav": {"schema": {"type": "string", "format": "binary"}},
+            "audio/mpeg": {"schema": {"type": "string", "format": "binary"}},
+            "audio/flac": {"schema": {"type": "string", "format": "binary"}},
+            "audio/ogg": {"schema": {"type": "string", "format": "binary"}},
+            "audio/aac": {"schema": {"type": "string", "format": "binary"}},
+            "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Audio stored atomically in local staging",
+            "headers": {
+              "Location": {"schema": {"type": "string"}}
+            },
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "#/components/schemas/UploadAccepted"}
+              }
+            }
+          },
+          "400": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"},
+          "411": {"$ref": "#/components/responses/Problem"},
+          "413": {"$ref": "#/components/responses/Problem"},
+          "415": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/jobs/{call_id}": {
+      "get": {
+        "operationId": "getJobStatus",
+        "parameters": [{"$ref": "#/components/parameters/CallId"}],
+        "responses": {
+          "200": {
+            "description": "Current durable queue status",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "../schemas/crm-job-status-v1.schema.json"}
+              }
+            }
+          },
+          "404": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    },
+    "/v1/jobs/{call_id}/result": {
+      "get": {
+        "operationId": "getTranscriptionResult",
+        "parameters": [{"$ref": "#/components/parameters/CallId"}],
+        "responses": {
+          "200": {
+            "description": "Completed transcription",
+            "content": {
+              "application/json": {
+                "schema": {"$ref": "../schemas/transcription-result-v1.1.schema.json"}
+              }
+            }
+          },
+          "404": {"$ref": "#/components/responses/Problem"},
+          "409": {"$ref": "#/components/responses/Problem"}
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "CallId": {
+        "name": "call_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+        }
+      }
+    },
+    "schemas": {
+      "UploadAccepted": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "api_version",
+          "call_id",
+          "status",
+          "source_audio",
+          "bytes_received",
+          "sha256",
+          "status_url",
+          "result_url"
+        ],
+        "properties": {
+          "api_version": {"const": "1.0"},
+          "call_id": {"type": "string"},
+          "status": {"const": "new"},
+          "source_audio": {"type": "string"},
+          "bytes_received": {"type": "integer", "minimum": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "status_url": {"type": "string"},
+          "result_url": {"type": "string"}
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["api_version", "error"],
+        "properties": {
+          "api_version": {"const": "1.0"},
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["code", "message"],
+            "properties": {
+              "code": {"type": "string"},
+              "message": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "Structured safe error",
+        "content": {
+          "application/json": {
+            "schema": {"$ref": "#/components/schemas/Problem"}
+          }
+        }
+      }
+    }
+  }
+}

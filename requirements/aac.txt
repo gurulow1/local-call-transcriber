@@ -1,0 +1,5 @@
+# Optional AAC decoder for CPython 3.11+ on the verified Intel macOS and Windows x64 hosts.
+# The PyAV wheels bundle FFmpeg libraries; their transitive licenses require review.
+av==18.0.0 \
+    --hash=sha256:149289d40e732a6e49c9530bc245b49d9964cfd1c8c9e06778703b7d5bba6b25 \
+    --hash=sha256:aaf4d354d2beaa6651e4f92e54409a578bde64f79c0beef9a30b388d06f7c629

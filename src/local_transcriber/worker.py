@@ -25,7 +25,7 @@ RETRYABLE_ERRORS = {"AudioDecodeError", "InferenceError", "OSError", "TimeoutErr
 @dataclass(frozen=True)
 class WorkerConfig:
     input_dir: Path
-    output_dir: Path
+    calls_dir: Path
     failed_dir: Path
     database_path: Path
     model_dir: Path
@@ -123,7 +123,7 @@ class FolderWorker:
         now = time.time() if now is None else now
         counts = {status: 0 for status in ("new", "queued", "processing", "completed", "failed")}
         self.config.input_dir.mkdir(parents=True, exist_ok=True)
-        self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        self.config.calls_dir.mkdir(parents=True, exist_ok=True)
         for input_path in sorted(self.config.input_dir.iterdir()):
             if input_path.is_symlink() or not input_path.is_file():
                 continue
@@ -131,7 +131,9 @@ class FolderWorker:
                 continue
             try:
                 call_id = extract_call_id(input_path)
-                output_path = self.config.output_dir / f"{call_id}.json"
+                call_dir = self.config.calls_dir / call_id
+                call_dir.mkdir(parents=True, exist_ok=True)
+                output_path = call_dir / f"{call_id}.json"
                 status = self.store.observe(
                     input_path,
                     output_path,
@@ -155,11 +157,15 @@ class FolderWorker:
             return False
         LOGGER.info("job_processing call_id=%s attempt=%d", job.call_id, job.attempts)
         try:
-            stat = job.input_path.stat()
+            located_input = self._locate_input(job)
+            stat = located_input.stat()
             if stat.st_size != job.observed_size or stat.st_mtime_ns != job.observed_mtime_ns:
-                self.store.release_changed_file(job, now=time.time())
-                LOGGER.info("job_returned_new call_id=%s reason=file_changed", job.call_id)
-                return True
+                if located_input.resolve(strict=False) == job.input_path.resolve(strict=False):
+                    self.store.release_changed_file(job, now=time.time())
+                    LOGGER.info("job_returned_new call_id=%s reason=file_changed", job.call_id)
+                    return True
+                raise QueueConflictError("Audio changed after it was moved into the call folder")
+            job = self._organize_input(job)
             with LeaseHeartbeat(self.store.database_path, job, self.config.lease_seconds):
                 result = transcribe_file(
                     TranscriptionRequest(
@@ -167,6 +173,7 @@ class FolderWorker:
                         output_path=job.output_path,
                         model_dir=self.config.model_dir,
                         decoder=self.config.decoder,
+                        markdown_output_path=job.output_path.with_suffix(".md"),
                         overwrite=True,
                     ),
                     engine=self.engine,
@@ -224,6 +231,37 @@ class FolderWorker:
             if final_status == "failed":
                 self._write_failed_marker(job, type(exc).__name__, str(exc), finished_at)
             return True
+
+    def _locate_input(self, job: QueueJob) -> Path:
+        current = job.input_path.resolve(strict=False)
+        if current.is_file() and not current.is_symlink():
+            return current
+        canonical = (self.config.calls_dir / job.call_id / job.input_path.name).resolve(strict=False)
+        if canonical.is_file() and not canonical.is_symlink():
+            return canonical
+        raise FileNotFoundError(f"Queued input is missing: {job.input_path.name}")
+
+    def _organize_input(self, job: QueueJob) -> QueueJob:
+        """Move a stable source into its call folder without changing its bytes."""
+
+        call_dir = self.config.calls_dir / job.call_id
+        call_dir.mkdir(parents=True, exist_ok=True)
+        destination = call_dir / job.input_path.name
+        current = job.input_path.resolve(strict=False)
+        canonical = destination.resolve(strict=False)
+        if current == canonical:
+            return job
+
+        if current.exists():
+            if current.is_symlink() or not current.is_file():
+                raise QueueConflictError("Queued input is no longer a regular file")
+            if canonical.exists():
+                raise QueueConflictError("Call folder already contains an audio file with this name")
+            current.replace(canonical)
+        elif not canonical.is_file() or canonical.is_symlink():
+            raise FileNotFoundError(f"Queued input is missing: {job.input_path.name}")
+
+        return self.store.relocate_input(job, canonical, now=time.time())
 
     def drain(self) -> int:
         processed = 0

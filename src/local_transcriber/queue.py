@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .service import extract_call_id
@@ -28,6 +28,21 @@ class QueueJob:
     observed_size: int
     observed_mtime_ns: int
     lease_owner: str | None
+
+
+@dataclass(frozen=True)
+class QueueSnapshot:
+    """Safe queue state for status APIs; local paths are intentionally omitted."""
+
+    call_id: str
+    status: str
+    attempts: int
+    max_attempts: int
+    created_at: float
+    updated_at: float
+    completed_at: float | None
+    error_type: str | None
+    error_message: str | None
 
 
 def _safe_error_message(message: str, limit: int = 500) -> str:
@@ -154,6 +169,35 @@ class QueueStore:
                 raise QueueConflictError(
                     f"call_id {call_id!r} already belongs to a different input file"
                 )
+            recorded_output_is_completed = _is_completed_output(
+                Path(str(row["output_path"])),
+                call_id,
+            )
+            if row["status"] == "completed" and not (
+                completed_output or recorded_output_is_completed
+            ):
+                self.connection.execute(
+                    """
+                    UPDATE jobs SET output_path=?, status='new', attempts=0, max_attempts=?,
+                        observed_size=?, observed_mtime_ns=?, stable_since=?, available_at=?,
+                        lease_owner=NULL, lease_expires_at=NULL,
+                        last_error_type=NULL, last_error_message=NULL,
+                        completed_at=NULL, updated_at=?
+                    WHERE id=?
+                    """,
+                    (
+                        str(output_path),
+                        max_attempts,
+                        stat.st_size,
+                        stat.st_mtime_ns,
+                        now,
+                        now,
+                        now,
+                        row["id"],
+                    ),
+                )
+                self.connection.execute("COMMIT")
+                return "new"
             if completed_output and row["status"] != "completed":
                 self.connection.execute(
                     """
@@ -314,6 +358,29 @@ class QueueStore:
             (now, now, job.id, job.lease_owner),
         )
 
+    def relocate_input(self, job: QueueJob, new_input_path: Path, *, now: float) -> QueueJob:
+        """Record a byte-preserving move into the canonical call directory."""
+
+        new_input_path = new_input_path.resolve(strict=True)
+        if extract_call_id(new_input_path) != job.call_id:
+            raise QueueConflictError("Relocated input must preserve call_id and filename stem")
+        stat = new_input_path.stat()
+        if stat.st_size != job.observed_size or stat.st_mtime_ns != job.observed_mtime_ns:
+            raise QueueConflictError("Relocated input metadata differs from the stable queued file")
+        try:
+            updated = self.connection.execute(
+                """
+                UPDATE jobs SET input_path=?, updated_at=?
+                WHERE id=? AND status='processing' AND lease_owner=?
+                """,
+                (str(new_input_path), now, job.id, job.lease_owner),
+            ).rowcount
+        except sqlite3.IntegrityError as exc:
+            raise QueueConflictError("Relocated input path already belongs to another job") from exc
+        if updated != 1:
+            raise QueueConflictError("Cannot relocate a job that is not owned by this worker")
+        return replace(job, input_path=new_input_path)
+
     def renew_lease(
         self,
         job_id: int,
@@ -369,6 +436,37 @@ class QueueStore:
             (call_id,),
         ).fetchone()
         return str(row["status"]) if row else None
+
+    def snapshot_for(self, call_id: str) -> QueueSnapshot | None:
+        row = self.connection.execute(
+            """
+            SELECT call_id, status, attempts, max_attempts, created_at, updated_at,
+                completed_at, last_error_type, last_error_message
+            FROM jobs WHERE call_id=?
+            """,
+            (call_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return QueueSnapshot(
+            call_id=str(row["call_id"]),
+            status=str(row["status"]),
+            attempts=int(row["attempts"]),
+            max_attempts=int(row["max_attempts"]),
+            created_at=float(row["created_at"]),
+            updated_at=float(row["updated_at"]),
+            completed_at=(
+                float(row["completed_at"]) if row["completed_at"] is not None else None
+            ),
+            error_type=(
+                str(row["last_error_type"]) if row["last_error_type"] is not None else None
+            ),
+            error_message=(
+                str(row["last_error_message"])
+                if row["last_error_message"] is not None
+                else None
+            ),
+        )
 
     def requeue_failed(self, call_id: str, *, now: float) -> bool:
         """Explicit administrative retry; completed jobs are never changed."""

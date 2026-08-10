@@ -1,0 +1,10 @@
+{
+  "api_version": "1.0",
+  "call_id": "demo-001",
+  "status": "new",
+  "source_audio": "demo-001.aac",
+  "bytes_received": 1048576,
+  "sha256": "d2f96ef06c5bfc0d9e7ad58e32064f4f786776ad0360cbf2018b397d3c7e2cab",
+  "status_url": "/v1/jobs/demo-001",
+  "result_url": "/v1/jobs/demo-001/result"
+}

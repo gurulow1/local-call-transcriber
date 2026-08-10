@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.1",
+  "call_id": "demo-001",
+  "status": "completed",
+  "source_audio": "demo-001.aac",
+  "language": "ru",
+  "duration_seconds": 4.2,
+  "processing_seconds": 2.1,
+  "real_time_factor": 0.5,
+  "model": {
+    "name": "T-one",
+    "version": "example",
+    "source_revision": "example-model-revision",
+    "source_code_revision": "example-code-revision",
+    "decoder": "greedy",
+    "local_path": "/srv/local-call-transcriber/models/t-one"
+  },
+  "text": "Здравствуйте. Проверяем локальную расшифровку.",
+  "raw_text": "здравствуйте проверяем локальную расшифровку",
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 4.0,
+      "text": "Здравствуйте. Проверяем локальную расшифровку.",
+      "asr_text": "здравствуйте проверяем локальную расшифровку"
+    }
+  ],
+  "postprocessing": {
+    "method": "deterministic_glossary_v1",
+    "glossary_version": "1",
+    "term_replacements": 0,
+    "phrase_replacements": 0
+  },
+  "created_at": "2026-08-10T09:00:05.000Z",
+  "completed_at": "2026-08-10T09:00:07.100Z",
+  "error": null
+}

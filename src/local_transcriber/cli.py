@@ -14,7 +14,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Transcribe one Russian call locally with pre-provisioned T-one weights",
     )
-    parser.add_argument("--input", required=True, type=Path, help="Local WAV/MP3/FLAC/OGG source")
+    parser.add_argument("--input", required=True, type=Path, help="Local WAV/MP3/FLAC/OGG/AAC source")
     parser.add_argument("--output", required=True, type=Path, help="JSON path with the same call_id")
     parser.add_argument(
         "--model-dir",
@@ -29,6 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="beam_search requires local kenlm.bin; greedy requires only model.onnx",
     )
     parser.add_argument("--txt-output", type=Path, help="Optional human-readable TXT path")
+    parser.add_argument(
+        "--markdown-output",
+        type=Path,
+        help="Optional formatted Markdown path with the same call_id",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing result")
     parser.add_argument(
         "--verify-model-hashes",
@@ -46,6 +51,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_dir=args.model_dir,
         decoder=args.decoder,
         txt_output_path=args.txt_output,
+        markdown_output_path=args.markdown_output,
         overwrite=args.overwrite,
         verify_model_hashes=args.verify_model_hashes,
     )
@@ -59,4 +65,3 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     print(json.dumps(summary, ensure_ascii=False))
     return 0 if result["status"] == "completed" else 1
-

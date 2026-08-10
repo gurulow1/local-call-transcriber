@@ -15,10 +15,12 @@ from typing import Any
 
 from .engine import AsrEngine, ToneEngine
 from .errors import InputValidationError, OutputValidationError
+from .markdown_output import render_transcript_markdown
+from .postprocessing import postprocess_segments
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 CALL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
-SUPPORTED_EXTENSIONS = frozenset({".wav", ".mp3", ".flac", ".ogg"})
+SUPPORTED_EXTENSIONS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".aac"})
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,7 @@ class TranscriptionRequest:
     model_dir: Path
     decoder: str = "beam_search"
     txt_output_path: Path | None = None
+    markdown_output_path: Path | None = None
     overwrite: bool = False
     verify_model_hashes: bool = False
 
@@ -73,6 +76,16 @@ def validate_request(request: TranscriptionRequest) -> str:
             raise OutputValidationError("TXT output must use the same call_id and end with .txt")
         if txt_path.exists() and not request.overwrite:
             raise OutputValidationError("TXT output already exists; use --overwrite")
+        if txt_path.exists() and (txt_path.is_symlink() or not txt_path.is_file()):
+            raise OutputValidationError("Existing TXT output must be a regular file, not a symlink")
+    if request.markdown_output_path is not None:
+        markdown_path = request.markdown_output_path
+        if markdown_path.suffix.lower() != ".md" or markdown_path.stem != call_id:
+            raise OutputValidationError("Markdown output must use the same call_id and end with .md")
+        if markdown_path.exists() and not request.overwrite:
+            raise OutputValidationError("Markdown output already exists; use --overwrite")
+        if markdown_path.exists() and (markdown_path.is_symlink() or not markdown_path.is_file()):
+            raise OutputValidationError("Existing Markdown output must be a regular file, not a symlink")
     return call_id
 
 
@@ -95,8 +108,8 @@ def transcribe_file(request: TranscriptionRequest, *, engine: AsrEngine | None =
         duration_seconds = float(engine_result.duration_seconds)
         if not math.isfinite(duration_seconds) or duration_seconds <= 0:
             raise InputValidationError("Decoded audio duration must be greater than zero")
-        segments = [asdict(segment) for segment in engine_result.segments]
-        text = " ".join(segment["text"] for segment in segments).strip()
+        asr_segments = [asdict(segment) for segment in engine_result.segments]
+        postprocessed = postprocess_segments(asr_segments)
         model = asdict(selected_engine.model_info)
         result: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
@@ -108,14 +121,21 @@ def transcribe_file(request: TranscriptionRequest, *, engine: AsrEngine | None =
             "processing_seconds": round(processing_seconds, 3),
             "real_time_factor": round(processing_seconds / duration_seconds, 4),
             "model": model,
-            "text": text,
-            "segments": segments,
+            "text": postprocessed.text,
+            "raw_text": postprocessed.raw_text,
+            "segments": postprocessed.segments,
+            "postprocessing": postprocessed.metadata,
             "created_at": created_at,
             "completed_at": utc_now(),
             "error": None,
         }
         if request.txt_output_path is not None:
-            _atomic_write_text(request.txt_output_path, text + ("\n" if text else ""))
+            _atomic_write_text(
+                request.txt_output_path,
+                postprocessed.text + ("\n" if postprocessed.text else ""),
+            )
+        if request.markdown_output_path is not None:
+            _atomic_write_text(request.markdown_output_path, render_transcript_markdown(result))
         _atomic_write_json(request.output_path, result)
         return result
     except Exception as exc:
@@ -131,7 +151,9 @@ def transcribe_file(request: TranscriptionRequest, *, engine: AsrEngine | None =
             "real_time_factor": 0.0,
             "model": None,
             "text": "",
+            "raw_text": "",
             "segments": [],
+            "postprocessing": None,
             "created_at": created_at,
             "completed_at": utc_now(),
             "error": {

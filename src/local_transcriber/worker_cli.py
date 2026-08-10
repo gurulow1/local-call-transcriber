@@ -27,7 +27,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="watch currently uses portable polling; batch is suitable for an external night scheduler",
     )
     parser.add_argument("--input-dir", type=Path, default=PROJECT_ROOT / "data" / "input")
-    parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "data" / "output")
+    parser.add_argument(
+        "--calls-dir",
+        "--output-dir",
+        dest="calls_dir",
+        type=Path,
+        default=PROJECT_ROOT / "data" / "calls",
+        help="Folder containing one subfolder per call (--output-dir is a compatibility alias)",
+    )
     parser.add_argument("--failed-dir", type=Path, default=PROJECT_ROOT / "data" / "failed")
     parser.add_argument("--database", type=Path, default=PROJECT_ROOT / "data" / "queue.sqlite3")
     parser.add_argument("--model-dir", type=Path, default=PROJECT_ROOT / "models" / "t-one")
@@ -58,7 +65,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     configure_logging(args.log)
     config = WorkerConfig(
         input_dir=args.input_dir,
-        output_dir=args.output_dir,
+        calls_dir=args.calls_dir,
         failed_dir=args.failed_dir,
         database_path=args.database,
         model_dir=args.model_dir,

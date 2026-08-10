@@ -51,9 +51,16 @@ class TranscriptionServiceTests(unittest.TestCase):
             original_bytes = source.read_bytes()
             original_stat = source.stat()
             output = root / "output" / "1234.json"
+            markdown_output = root / "output" / "1234.md"
 
             result = transcribe_file(
-                TranscriptionRequest(source, output, root / "models", decoder="greedy"),
+                TranscriptionRequest(
+                    source,
+                    output,
+                    root / "models",
+                    decoder="greedy",
+                    markdown_output_path=markdown_output,
+                ),
                 engine=FakeEngine(),
             )
 
@@ -63,29 +70,38 @@ class TranscriptionServiceTests(unittest.TestCase):
             self.assertEqual(result["source_audio"], "1234.wav")
             self.assertEqual(result["language"], "ru")
             self.assertEqual(result["duration_seconds"], 2.5)
-            self.assertEqual(result["text"], "тестовая запись")
+            self.assertEqual(result["text"], "Тестовая. Запись.")
+            self.assertEqual(result["raw_text"], "тестовая запись")
             self.assertEqual(len(result["segments"]), 2)
+            self.assertEqual(result["segments"][0]["asr_text"], "тестовая")
+            self.assertEqual(result["segments"][0]["text"], "Тестовая.")
+            self.assertEqual(result["postprocessing"]["method"], "deterministic_glossary_v1")
             self.assertEqual(result["model"]["name"], "T-one")
             self.assertIsNone(result["error"])
             self.assertEqual(json.loads(output.read_text(encoding="utf-8")), result)
+            markdown = markdown_output.read_text(encoding="utf-8")
+            self.assertIn("# Расшифровка: 1234", markdown)
+            self.assertIn("[Открыть исходное аудио](./1234.wav)", markdown)
+            self.assertIn("Тестовая. Запись.", markdown)
             self.assertEqual(source.read_bytes(), original_bytes)
             self.assertEqual(source.stat().st_mtime_ns, original_stat.st_mtime_ns)
             self.assertEqual(list(output.parent.glob("*.tmp")), [])
 
-    def test_common_compressed_extension_is_accepted(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_dir:
-            root = Path(temporary_dir)
-            source = root / "call-42.mp3"
-            source.write_bytes(b"synthetic-compressed-placeholder")
-            output = root / "call-42.json"
+    def test_common_compressed_extensions_are_accepted(self) -> None:
+        for extension in (".mp3", ".aac"):
+            with self.subTest(extension=extension), tempfile.TemporaryDirectory() as temporary_dir:
+                root = Path(temporary_dir)
+                source = root / f"call-42{extension}"
+                source.write_bytes(b"synthetic-compressed-placeholder")
+                output = root / "call-42.json"
 
-            result = transcribe_file(
-                TranscriptionRequest(source, output, root / "models", decoder="greedy"),
-                engine=FakeEngine(),
-            )
+                result = transcribe_file(
+                    TranscriptionRequest(source, output, root / "models", decoder="greedy"),
+                    engine=FakeEngine(),
+                )
 
-            self.assertEqual(result["status"], "completed")
-            self.assertEqual(result["call_id"], "call-42")
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["call_id"], "call-42")
 
     def test_output_name_must_match_call_id(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -134,6 +150,35 @@ class TranscriptionServiceTests(unittest.TestCase):
             self.assertEqual(result["status"], "failed")
             self.assertEqual(output.read_text(encoding="utf-8"), "existing-result")
 
+    def test_markdown_symlink_is_not_followed_during_explicit_reprocessing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            source = root / "1234.wav"
+            source.write_bytes(b"placeholder")
+            output = root / "1234.json"
+            protected = root / "protected.md"
+            protected.write_text("do-not-overwrite", encoding="utf-8")
+            markdown_output = root / "1234.md"
+            try:
+                markdown_output.symlink_to(protected)
+            except (NotImplementedError, OSError):
+                self.skipTest("symlinks are unavailable on this platform")
+
+            result = transcribe_file(
+                TranscriptionRequest(
+                    source,
+                    output,
+                    root / "models",
+                    markdown_output_path=markdown_output,
+                    overwrite=True,
+                ),
+                engine=FakeEngine(),
+            )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["error"]["type"], "OutputValidationError")
+            self.assertEqual(protected.read_text(encoding="utf-8"), "do-not-overwrite")
+
     def test_failed_explicit_reprocessing_preserves_previous_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
@@ -165,7 +210,9 @@ class TranscriptionServiceTests(unittest.TestCase):
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["error"]["type"], "InferenceError")
             self.assertEqual(result["text"], "")
+            self.assertEqual(result["raw_text"], "")
             self.assertEqual(result["segments"], [])
+            self.assertIsNone(result["postprocessing"])
             self.assertNotIn("тестовая", output.read_text(encoding="utf-8"))
 
     def test_failed_envelope_can_be_refreshed_on_explicit_retry(self) -> None:

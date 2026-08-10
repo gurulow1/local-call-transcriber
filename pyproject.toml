@@ -13,10 +13,10 @@ dependencies = []
 
 [project.optional-dependencies]
 audio = ["miniaudio==1.61"]
+aac = ["av==18.0.0; python_version >= '3.11'"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

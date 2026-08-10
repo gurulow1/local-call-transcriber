@@ -1,4 +1,6 @@
 # Local models and generated/private data
+.DS_Store
+**/.DS_Store
 models/*
 !models/.gitkeep
 !models/README.md
@@ -7,6 +9,8 @@ data/input/*
 !data/input/.gitkeep
 data/output/*
 !data/output/.gitkeep
+data/calls/*
+!data/calls/.gitkeep
 data/failed/*
 !data/failed/.gitkeep
 data/*.sqlite3

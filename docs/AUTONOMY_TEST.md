@@ -14,7 +14,7 @@
 
 ## Воспроизводимая OS-level проверка на macOS
 
-В проекте есть тестовый profile `security/macos-deny-network.sb`:
+В проекте есть тестовый profile `security/macos-deny-network.sb`. Ниже сохранена историческая команда проверки, выполненной до перехода на папки `data/calls`:
 
 ```bash
 sandbox-exec -f security/macos-deny-network.sb \
@@ -23,6 +23,8 @@ sandbox-exec -f security/macos-deny-network.sb \
   --output data/output/1001_offline.json \
   --decoder greedy
 ```
+
+Для новой проверки нужно взять отдельную копию синтетического аудио с новым `call_id`: рабочий обработчик сам перенесёт её из `data/input` в `data/calls/<call_id>/` и создаст JSON и Markdown. Уже созданные результаты не перезаписываются.
 
 Получен `completed`: 16,115 с WAV обработаны за 9,430 с, RTF `0,5852`; текст совпал с обычным sandbox-запуском, исходный SHA-256 не изменился. Этот механизм предназначен только для локального доказательства; `sandbox-exec` deprecated и не заменяет промышленный firewall.
 

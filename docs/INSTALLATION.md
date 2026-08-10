@@ -30,6 +30,22 @@ deactivate
 .venv/bin/pip install --only-binary=:all: miniaudio==1.61
 ```
 
+Для AAC ADTS дополнительно скачать и установить зафиксированный PyAV wheel. Проверены CPython 3.12/macOS Intel и CPython 3.11/Windows x64:
+
+```bash
+.venv/bin/pip download \
+  --only-binary=:all: --no-deps --require-hashes \
+  --dest .poetry-cache/aac \
+  -r requirements/aac.txt
+
+.venv/bin/pip install \
+  --no-index --no-deps --require-hashes \
+  --find-links .poetry-cache/aac \
+  -r requirements/aac.txt
+```
+
+Wheel содержит библиотеки FFmpeg; PyAV имеет BSD-3-Clause, а транзитивные лицензии сборки FFmpeg нужно проверить до внутренней поставки.
+
 Editable install не рекомендуется: на проверенном пути с кириллицей `.pth` работал нестабильно. Перед внутренней поставкой Poetry, build backend, все wheels и их hashes также нужно pin/mirror; эта процедура ещё не является готовым offline wheelhouse.
 
 ### Проверенный Windows greedy runtime
@@ -61,6 +77,8 @@ python -m venv .venv
   --no-index --no-deps `
   .poetry-cache\windows-cp311\tone-0.1.0-py3-none-any.whl
 ```
+
+Для AAC на Windows затем повторить `pip download`/`pip install` из предыдущего раздела, заменив `.venv/bin/` на `.venv\Scripts\`.
 
 Upstream `tone==0.1.0` объявляет Python binding KenLM обязательным даже для greedy, хотя локальный greedy-путь его не вызывает. На проверенной Windows-среде binding не устанавливается: нет официального wheel, а непроверенная локальная C++-сборка исключена. Поэтому `pip check` сообщает только известное отсутствие `tone -> kenlm`; beam search остаётся недоступен. Решение зафиксировано в ADR-008.
 
@@ -102,8 +120,9 @@ Beam-search bundle дополнительно скачивает 5 463 477 004 �
 
 ```bash
 .venv/bin/python transcribe.py \
-  --input data/input/1234.wav \
-  --output data/output/1234.json \
+  --input data/calls/1234/1234.wav \
+  --output data/calls/1234/1234.json \
+  --markdown-output data/calls/1234/1234.md \
   --decoder greedy
 ```
 
@@ -111,8 +130,9 @@ Windows:
 
 ```powershell
 .venv\Scripts\python.exe transcribe.py `
-  --input data\input\1234.wav `
-  --output data\output\1234.json `
+  --input data\calls\1234\1234.wav `
+  --output data\calls\1234\1234.json `
+  --markdown-output data\calls\1234\1234.md `
   --decoder greedy `
   --verify-model-hashes
 ```
@@ -135,7 +155,7 @@ Windows:
 .venv/bin/python worker.py --mode batch --decoder greedy
 ```
 
-По умолчанию файл должен быть неизменным 5 секунд. SQLite находится в `data/queue.sqlite3`, технический лог — `logs/worker.log`. Failed job повторяется ограниченно только для временных классов; ручной повтор:
+По умолчанию файл должен быть неизменным 5 секунд. Затем он без перекодирования перемещается из `data/input` в `data/calls/{call_id}/`; туда же публикуются `{call_id}.json` и `{call_id}.md`. SQLite находится в `data/queue.sqlite3`, технический лог — `logs/worker.log`. Failed job повторяется ограниченно только для временных классов; ручной повтор:
 
 ```bash
 .venv/bin/python worker.py --mode once --decoder greedy --requeue 1234
