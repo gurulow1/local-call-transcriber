@@ -22,6 +22,8 @@ logs/*
 
 # Python
 .venv/
+.runtime/
+.runtime-cache/
 .poetry-cache/
 .poetry-config/
 __pycache__/

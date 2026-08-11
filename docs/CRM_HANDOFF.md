@@ -5,7 +5,7 @@
 Транскрибатор — автономный локальный модуль. CRM передаёт ему аудио, опрашивает статус и забирает версионированный JSON. Визуальный интерфейс остаётся в CRM.
 
 ```text
-CRM -> PUT audio -> staging -> SQLite queue -> T-one -> JSON -> CRM
+CRM -> PUT audio -> staging -> SQLite queue -> selected local ASR -> JSON -> CRM
 ```
 
 Статический контракт: [`openapi-v1.json`](openapi-v1.json). JSON Schema: [`../schemas/`](../schemas/). Искусственные примеры: [`../examples/crm/`](../examples/crm/).
@@ -15,7 +15,7 @@ CRM -> PUT audio -> staging -> SQLite queue -> T-one -> JSON -> CRM
 Один процесс выполняет ASR:
 
 ```bash
-.venv/bin/python worker.py --mode poll --decoder greedy
+.venv/bin/python worker.py --mode poll --engine whisper --decoder beam_search
 ```
 
 Второй процесс принимает локальные HTTP-запросы:

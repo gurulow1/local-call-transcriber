@@ -6,6 +6,14 @@
 
 Текущий основной путь использует официальный CUDA bundle `whisper.cpp v1.9.2` и GGML F16 `Whisper large-v3`. Нужны Windows x64, NVIDIA GPU/driver и около 4 ГБ свободного диска сверх окружения.
 
+### Автоматическая подготовка распакованного архива
+
+Дважды нажать корневой `START_TRANSCRIBER.cmd`. Launcher требует не менее 6 ГиБ свободного места на время staging и последовательно выполняет проверяемые шаги установки. Если подходящего 64-битного Python 3.11 нет, он скачивает официальный installer Python 3.11.9 размером 26 216 840 байт и допускает его только при SHA-256 `5ee42c4eee1e6b4464bb23722f90b45303f79442df63083f05322f1785f5fdde`. Python устанавливается в gitignored `.runtime/`, wheels кэшируются в `.runtime-cache/`, а рабочее окружение создаётся в `.venv/`.
+
+Все сетевые загрузки выполняются до firewall. После успешной проверки модели и тестов launcher вызывает `security/windows-deny-network.ps1` через отдельное административное окно. Если elevation отменён или firewall не применён, worker не запускается. После успеха открывается `data/input` и выполняется `worker.py --mode poll --engine whisper --decoder beam_search`.
+
+Launcher является путём локального пилота, а не production installer: он не задаёт корпоративные ACL, шифрование, срок хранения, service identity, централизованный audit или production-интеграцию CRM.
+
 После создания `.venv` установить проект и обязательный `miniaudio==1.61`, затем в отдельной staging-фазе:
 
 ```powershell

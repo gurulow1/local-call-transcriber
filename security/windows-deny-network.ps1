@@ -23,7 +23,13 @@ foreach ($target in $targets) {
     $existing = Get-NetFirewallRule -DisplayName $target.Name -ErrorAction SilentlyContinue
     if ($existing) {
         $program = ($existing | Get-NetFirewallApplicationFilter).Program
-        if ($program -ne $target.Program -or $existing.Direction -ne "Outbound" -or $existing.Action -ne "Block") {
+        if (
+            $program -ne $target.Program -or
+            $existing.Direction -ne "Outbound" -or
+            $existing.Action -ne "Block" -or
+            $existing.Enabled -ne "True" -or
+            $existing.Profile -ne "Any"
+        ) {
             throw "Firewall rule '$($target.Name)' exists with unexpected settings."
         }
     } else {

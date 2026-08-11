@@ -79,6 +79,7 @@
 - [x] Технический rotating-log без текста звонка.
 - [x] Интеграционный тест: failed -> explicit requeue -> completed -> идемпотентный пропуск.
 - [x] Обеспечить импорт и запуск worker CLI на Windows без Unix-only `resource`.
+- [x] Добавить fail-closed one-click launcher для чистого Windows/NVIDIA pilot-хоста.
 
 **Готовность:** этап начинается только после успешного одиночного теста; повторно завершённые звонки не обрабатываются.
 
