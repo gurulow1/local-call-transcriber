@@ -1,13 +1,11 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 
-set -eu
-setopt pipefail
+set -Eeuo pipefail
 
-PROJECT_DIR=${0:A:h}
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 cd "$PROJECT_DIR"
 [[ -f worker.py && -f scripts/bootstrap_runtime.py ]] || {
-  echo "Ошибка: запускатор должен находиться внутри распакованной папки проекта."
-  read -r "REPLY?Нажмите Enter, чтобы закрыть окно."
+  echo "Launcher is not inside an unpacked project folder."
   exit 1
 }
 
@@ -16,35 +14,35 @@ exec > >(tee -a "$PROJECT_DIR/logs/setup.log") 2>&1
 
 on_error() {
   local status=$?
-  trap - ZERR
+  trap - ERR
   set +e
   echo
-  echo "Установка или запуск не завершены. Подробности: logs/setup.log."
-  read -r "REPLY?Нажмите Enter, чтобы закрыть окно."
+  echo "Setup or launch failed. See logs/setup.log for details."
+  if [[ -t 0 ]]; then
+    read -r -p "Press Enter to close."
+  fi
   exit "$status"
 }
-trap on_error ZERR
-
-[[ "$(uname -s)" == "Darwin" ]] || {
-  echo "Ошибка: этот файл предназначен для macOS."
-  false
-}
+trap on_error ERR
 
 UV_VERSION="0.11.13"
 case "$(uname -m)" in
-  arm64)
-    UV_TARGET="aarch64-apple-darwin"
-    UV_SHA256="196a58aa24da89144187670df7c407358028984537fbc2f8f2d8f7a2604980df"
-    ;;
   x86_64)
-    UV_TARGET="x86_64-apple-darwin"
-    UV_SHA256="99aad3f4956f5b92efd83eca6d87bf03e10688899487ad541f904c9c25c61dc1"
+    UV_TARGET="x86_64-unknown-linux-gnu"
+    UV_SHA256="f830ea3d38ae1492acf53cb7f2cd0f81d6ae22b42d2d7310a6c7d42c451e1a43"
     ;;
   *)
-    echo "Ошибка: неподдерживаемая архитектура Mac: $(uname -m)"
+    echo "Unsupported Linux architecture: $(uname -m). This launcher requires x86_64."
     false
     ;;
 esac
+
+for command in curl sha256sum tar mktemp; do
+  command -v "$command" >/dev/null || {
+    echo "Required system command is missing: $command"
+    false
+  }
+done
 
 UV_BIN="$PROJECT_DIR/.poetry-cache/bin/uv"
 if [[ ! -x "$UV_BIN" ]] || [[ "$("$UV_BIN" --version 2>/dev/null || true)" != "uv $UV_VERSION" ]]; then
@@ -54,7 +52,7 @@ if [[ ! -x "$UV_BIN" ]] || [[ "$("$UV_BIN" --version 2>/dev/null || true)" != "u
   curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --progress-bar \
     --output "$PARTIAL" \
     "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-${UV_TARGET}.tar.gz"
-  [[ "$(shasum -a 256 "$PARTIAL" | awk '{print $1}')" == "$UV_SHA256" ]]
+  [[ "$(sha256sum "$PARTIAL" | awk '{print $1}')" == "$UV_SHA256" ]]
   mv "$PARTIAL" "$ARCHIVE"
   STAGE="$(mktemp -d "$PROJECT_DIR/.poetry-cache/uv-stage.XXXXXX")"
   tar -xzf "$ARCHIVE" -C "$STAGE"

@@ -5,23 +5,38 @@
 Транскрибатор — автономный локальный модуль. CRM передаёт ему аудио, опрашивает статус и забирает версионированный JSON. Визуальный интерфейс остаётся в CRM.
 
 ```text
-CRM -> PUT audio -> staging -> SQLite queue -> selected local ASR -> JSON -> CRM
+CRM -> PUT audio -> staging -> SQLite queue -> local ASR -> JSON -> CRM
 ```
+
+На Windows с NVIDIA one-click запуск выбирает Whisper large-v3/CUDA; без NVIDIA, на Linux и macOS — T-one/CPU. HTTP-контракт и формат результата от выбранного движка не зависят.
 
 Статический контракт: [`openapi-v1.json`](openapi-v1.json). JSON Schema: [`../schemas/`](../schemas/). Искусственные примеры: [`../examples/crm/`](../examples/crm/).
 
 ## Reference-запуск
 
-Один процесс выполняет ASR:
+One-click файл платформы уже запускает ASR-worker. Для ручного reference-запуска после автоматической установки:
+
+```powershell
+# Windows + NVIDIA
+.poetry-cache\venv\Scripts\python.exe worker.py --mode poll --engine whisper --decoder beam_search
+
+# Windows без NVIDIA
+.poetry-cache\venv\Scripts\python.exe worker.py --mode poll --engine t-one --decoder greedy
+```
 
 ```bash
-.venv/bin/python worker.py --mode poll --engine whisper --decoder beam_search
+# Linux/macOS
+.poetry-cache/venv/bin/python worker.py --mode poll --engine t-one --decoder greedy
 ```
 
 Второй процесс принимает локальные HTTP-запросы:
 
+```powershell
+.poetry-cache\venv\Scripts\python.exe crm_api.py --port 8765
+```
+
 ```bash
-.venv/bin/python crm_api.py --port 8765
+.poetry-cache/venv/bin/python crm_api.py --port 8765
 ```
 
 Сервер намеренно слушает только `127.0.0.1`. У него нет аутентификации и TLS, поэтому его нельзя публиковать в LAN/интернет. Для production команда CRM выбирает нативный адаптер либо размещает эталон за корпоративным mTLS/service-auth proxy.
@@ -61,10 +76,12 @@ curl --fail-with-body http://127.0.0.1:8765/v1/jobs/demo-001/result
 Для проверки без `curl` есть stdlib-клиент. Он намеренно подключается только к loopback:
 
 ```bash
-.venv/bin/python scripts/crm_client.py upload --audio demo-001.aac
-.venv/bin/python scripts/crm_client.py status --call-id demo-001
-.venv/bin/python scripts/crm_client.py result --call-id demo-001
+.poetry-cache/venv/bin/python scripts/crm_client.py upload --audio demo-001.aac
+.poetry-cache/venv/bin/python scripts/crm_client.py status --call-id demo-001
+.poetry-cache/venv/bin/python scripts/crm_client.py result --call-id demo-001
 ```
+
+На Windows в этих трёх командах используется `.poetry-cache\venv\Scripts\python.exe`.
 
 В dev/test для этих команд используются только искусственные или разрешённые тестовые данные.
 
