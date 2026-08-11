@@ -1,4 +1,4 @@
-"""Validation of the local, pinned T-one model bundle."""
+"""Validation of a local, pinned ASR model bundle."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from typing import Any
 
 from .errors import ModelValidationError
 
-EXPECTED_MODEL_NAME = "T-one"
 EXPECTED_MANIFEST_SCHEMA = "1.0"
 
 
@@ -34,7 +33,7 @@ class ModelManifest:
     artifacts: dict[str, Artifact]
 
     @classmethod
-    def load(cls, model_dir: Path) -> "ModelManifest":
+    def load(cls, model_dir: Path, *, expected_name: str | None = None) -> "ModelManifest":
         manifest_path = model_dir / "manifest.json"
         if not manifest_path.is_file():
             raise ModelValidationError(
@@ -52,7 +51,8 @@ class ModelManifest:
             raise ModelValidationError(
                 f"Unsupported model manifest schema: {payload.get('schema_version')!r}"
             )
-        if payload.get("name") != EXPECTED_MODEL_NAME:
+        name = cls._required_string(payload, "name")
+        if expected_name is not None and name != expected_name:
             raise ModelValidationError(f"Unexpected model name: {payload.get('name')!r}")
 
         version = cls._required_string(payload, "version")
@@ -81,7 +81,7 @@ class ModelManifest:
             artifacts[filename] = Artifact(filename, size_bytes, sha256)
 
         return cls(
-            name=EXPECTED_MODEL_NAME,
+            name=name,
             version=version,
             source_revision=source_revision,
             source_code_revision=source_code_revision,
@@ -124,4 +124,3 @@ def sha256_file(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
         for chunk in iter(lambda: source.read(chunk_size), b""):
             digest.update(chunk)
     return digest.hexdigest()
-

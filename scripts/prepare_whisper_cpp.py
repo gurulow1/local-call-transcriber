@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Stage pinned whisper.cpp CUDA runtime and large-v3 weights."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import shutil
+import tempfile
+import urllib.request
+import zipfile
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_URL = (
+    "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/"
+    "whisper-cublas-12.4.0-bin-x64.zip"
+)
+RUNTIME_SIZE = 670_611_449
+RUNTIME_SHA256 = "443110ddaad70d4290ab2e77179e31cf712035bbc4fad56bb4519a90c917b39c"
+MODEL_URL = (
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/"
+    "362722b3fdcd2300b58a8286933ead1c48619667/ggml-large-v3.bin"
+)
+MODEL_SIZE = 3_095_033_483
+MODEL_SHA256 = "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+
+
+def _download(url: str, destination: Path, size: int, sha256: str) -> None:
+    if destination.is_file() and destination.stat().st_size == size:
+        if _sha256(destination) == sha256:
+            print(f"already verified: {destination}")
+            return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.part")
+    with urllib.request.urlopen(url) as source, temporary.open("wb") as target:
+        copied = 0
+        while chunk := source.read(8 * 1024 * 1024):
+            target.write(chunk)
+            copied += len(chunk)
+            if copied % (256 * 1024 * 1024) < len(chunk):
+                print(f"downloaded {copied / 1024 / 1024:.0f} MiB: {destination.name}")
+    if temporary.stat().st_size != size:
+        raise SystemExit(f"size mismatch for {destination.name}")
+    actual_hash = _sha256(temporary)
+    if actual_hash != sha256:
+        raise SystemExit(f"SHA-256 mismatch for {destination.name}: {actual_hash}")
+    temporary.replace(destination)
+    print(f"verified: {destination}")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_extract(archive: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    with zipfile.ZipFile(archive) as package:
+        for member in package.infolist():
+            target = (root / member.filename).resolve()
+            if root not in target.parents and target != root:
+                raise SystemExit(f"unsafe path in runtime archive: {member.filename}")
+        package.extractall(root)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--allow-network-download", action="store_true")
+    parser.add_argument(
+        "--runtime-target",
+        type=Path,
+        default=PROJECT_ROOT / "third_party" / "whisper.cpp",
+    )
+    parser.add_argument(
+        "--model-target",
+        type=Path,
+        default=PROJECT_ROOT / "models" / "whisper-large-v3",
+    )
+    args = parser.parse_args()
+    if not args.allow_network_download:
+        parser.error("refusing network staging without --allow-network-download")
+    if os.name != "nt":
+        parser.error("the pinned CUDA runtime bundle is currently supported only on Windows x64")
+
+    runtime_target = args.runtime_target.resolve(strict=False)
+    model_target = args.model_target.resolve(strict=False)
+    with tempfile.TemporaryDirectory(dir=PROJECT_ROOT, prefix=".whisper-stage-") as staging:
+        runtime_archive = Path(staging) / "whisper-runtime.zip"
+        _download(RUNTIME_URL, runtime_archive, RUNTIME_SIZE, RUNTIME_SHA256)
+        _safe_extract(runtime_archive, runtime_target)
+
+    model_path = model_target / "ggml-large-v3.bin"
+    _download(MODEL_URL, model_path, MODEL_SIZE, MODEL_SHA256)
+    shutil.copyfile(
+        PROJECT_ROOT / "models" / "whisper-large-v3.manifest.example.json",
+        model_target / "manifest.json",
+    )
+    executable = next(runtime_target.rglob("whisper-cli.exe"), None)
+    if executable is None:
+        raise SystemExit("whisper-cli.exe was not found in the verified runtime archive")
+    print(f"runtime: {executable}")
+    print(f"model: {model_target}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -5,6 +5,7 @@ models/*
 !models/.gitkeep
 !models/README.md
 !models/manifest.example.json
+!models/whisper-large-v3.manifest.example.json
 data/input/*
 !data/input/.gitkeep
 data/output/*

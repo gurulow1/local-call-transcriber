@@ -77,7 +77,7 @@ GET /v1/jobs/{call_id}/result
   "processing_seconds": 0.0,
   "real_time_factor": 0.0,
   "model": {
-    "name": "T-one",
+    "name": "Whisper large-v3",
     "version": "",
     "local_path": ""
   },

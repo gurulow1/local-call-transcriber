@@ -1,24 +1,40 @@
 #requires -RunAsAdministrator
 
 $ErrorActionPreference = "Stop"
-$ruleName = "Local Call Transcriber - Block Outbound"
 $python = (Resolve-Path -LiteralPath "$PSScriptRoot\..\.venv\Scripts\python.exe").Path
-$existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
-
-if ($existing) {
-    $program = ($existing | Get-NetFirewallApplicationFilter).Program
-    if ($program -ne $python -or $existing.Direction -ne "Outbound" -or $existing.Action -ne "Block") {
-        throw "Firewall rule '$ruleName' exists with unexpected settings."
+$targets = @(
+    @{
+        Name = "Local Call Transcriber - Block Outbound"
+        Program = $python
+        Description = "Deny all outbound traffic for the local transcriber Python runtime."
     }
-} else {
-    New-NetFirewallRule `
-        -DisplayName $ruleName `
-        -Description "Deny all outbound traffic for the local call transcriber runtime Python." `
-        -Direction Outbound `
-        -Program $python `
-        -Action Block `
-        -Profile Any `
-        -Enabled True | Out-Null
+)
+$whisper = Get-ChildItem -LiteralPath "$PSScriptRoot\..\third_party\whisper.cpp" -Recurse -Filter whisper-cli.exe -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if ($whisper) {
+    $targets += @{
+        Name = "Local Call Transcriber - Block Outbound - whisper.cpp"
+        Program = $whisper.FullName
+        Description = "Deny all outbound traffic for the local whisper.cpp runtime."
+    }
 }
 
-Write-Output "Outbound network is blocked for $python"
+foreach ($target in $targets) {
+    $existing = Get-NetFirewallRule -DisplayName $target.Name -ErrorAction SilentlyContinue
+    if ($existing) {
+        $program = ($existing | Get-NetFirewallApplicationFilter).Program
+        if ($program -ne $target.Program -or $existing.Direction -ne "Outbound" -or $existing.Action -ne "Block") {
+            throw "Firewall rule '$($target.Name)' exists with unexpected settings."
+        }
+    } else {
+        New-NetFirewallRule `
+            -DisplayName $target.Name `
+            -Description $target.Description `
+            -Direction Outbound `
+            -Program $target.Program `
+            -Action Block `
+            -Profile Any `
+            -Enabled True | Out-Null
+    }
+    Write-Output "Outbound network is blocked for $($target.Program)"
+}

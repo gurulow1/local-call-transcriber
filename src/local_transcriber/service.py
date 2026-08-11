@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .engine import AsrEngine, ToneEngine
+from .engine import AsrEngine, create_engine
 from .errors import InputValidationError, OutputValidationError
 from .markdown_output import render_transcript_markdown
 from .postprocessing import postprocess_segments
@@ -31,6 +31,9 @@ class TranscriptionRequest:
     output_path: Path
     model_dir: Path
     decoder: str = "beam_search"
+    engine_name: str = "whisper"
+    whisper_cli_path: Path | None = None
+    initial_prompt: str | None = None
     txt_output_path: Path | None = None
     markdown_output_path: Path | None = None
     overwrite: bool = False
@@ -98,11 +101,7 @@ def transcribe_file(request: TranscriptionRequest, *, engine: AsrEngine | None =
 
     try:
         call_id = validate_request(request)
-        selected_engine = engine or ToneEngine(
-            request.model_dir,
-            decoder=request.decoder,
-            verify_model_hashes=request.verify_model_hashes,
-        )
+        selected_engine = engine or _create_engine(request)
         engine_result = selected_engine.transcribe(request.input_path)
         processing_seconds = time.perf_counter() - started
         duration_seconds = float(engine_result.duration_seconds)
@@ -163,6 +162,18 @@ def transcribe_file(request: TranscriptionRequest, *, engine: AsrEngine | None =
         }
         _write_failure_if_safe(request, result)
         return result
+
+
+def _create_engine(request: TranscriptionRequest) -> AsrEngine:
+    return create_engine(
+        request.engine_name,
+        request.model_dir,
+        decoder=request.decoder,
+        scratch_dir=request.output_path.parent / ".tmp",
+        whisper_cli_path=request.whisper_cli_path,
+        initial_prompt=request.initial_prompt,
+        verify_model_hashes=request.verify_model_hashes,
+    )
 
 
 def _write_failure_if_safe(request: TranscriptionRequest, result: dict[str, Any]) -> None:

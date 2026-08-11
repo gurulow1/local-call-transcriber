@@ -1,6 +1,6 @@
 # Локальный транскрибатор звонков
 
-Минимальная цель проекта:
+Автономный CLI и SQLite-worker для русской речи:
 
 ```text
 data/input/1234.wav
@@ -10,20 +10,13 @@ data/input/1234.wav
        1234.md
 ```
 
-Основной кандидат — T-one, резервный — whisper.cpp. Статический аудит, одиночный greedy-прототип и SQLite-worker реализованы. Решение ещё не готово к production: beam search, расширенный quality-набор, SCA/CVE, целевая Linux-среда и нагрузочные тесты не завершены.
+Основной движок — `whisper.cpp v1.9.2` с локальной `Whisper large-v3`, beam search и CUDA. Лёгкий T-one/greedy сохранён как fallback. Облачные API и автоматическая загрузка весов во время обработки запрещены.
 
-Greedy runtime также фактически проверен на Windows 10 / CPython 3.11: одиночный CLI и SQLite-worker работают с локальным `model.onnx`; установка использует Windows wheelhouse с SHA-256 из `requirements/windows-greedy.txt`.
+На проверенном Windows-хосте с RTX 3080 сложный синтетический файл длительностью 16,115 с обработан за 4,162 с (`RTF 0,2583`). Whisper правильно распознал БИК, ИНН, НКЦ, сумму и дату, но фразу «четыре ноля и один» оформил как `4001`. Поэтому проект готов для локального пилота и передачи на проверку, но реквизиты нельзя принимать без бизнес-валидации.
 
-## Принципы
+## Быстрый запуск на проверенном Windows/NVIDIA-хосте
 
-- никакого внешнего API;
-- никакой автоматической загрузки модели при обработке;
-- только локальные веса из `models/`;
-- реальные корпоративные звонки не используются для разработки и тестов;
-- исходное аудио остаётся неизменным;
-- сначала проверяется один искусственный звонок, затем очередь и фоновые режимы.
-
-Входные форматы: WAV, MP3, FLAC, OGG и AAC ADTS. AAC декодируется локальным PyAV из зафиксированного wheel; в runtime ничего не скачивается.
+Входные форматы: WAV, MP3, FLAC, OGG и AAC ADTS. AAC декодируется локальным PyAV из зафиксированного wheel; для Whisper внутри временного scratch-каталога создаётся mono 16 кГц WAV, который удаляется после обработки. В runtime ничего не скачивается.
 
 После ASR выполняется локальная детерминированная постобработка: границы ASR-сегментов получают заглавную букву и финальный знак, а ошибочные написания терминов исправляются по редактируемому [`config/glossary.json`](config/glossary.json). Исходная выдача ASR всегда сохраняется в `raw_text` и `segments[].asr_text`; `text` содержит очищенную версию. LLM в этом пути не используется.
 
@@ -51,46 +44,80 @@ git clone https://github.com/gurulow1/local-call-transcriber.git
 cd local-call-transcriber
 ```
 
-Веса, аудио, транскрипции, логи, `.venv`, wheelhouse и checkout T-one намеренно исключены. На Mac после клонирования заново выполнить staging из [docs/INSTALLATION.md](docs/INSTALLATION.md), проверить `models/t-one` и только затем запускать greedy. Приватный репозиторий не является хранилищем корпоративных данных.
+Локальные артефакты Whisper подготавливаются отдельным staging-шагом:
+
+```powershell
+.venv\Scripts\python.exe scripts\prepare_whisper_cpp.py --allow-network-download
+.venv\Scripts\python.exe scripts\verify_model.py models\whisper-large-v3
+```
+
+Staging скачивает около 0,67 ГБ официального CUDA-runtime и 3,1 ГБ весов, затем проверяет размер и SHA-256. Runtime после этого сеть не использует.
 
 ## Проверенный одиночный запуск
 
-После контролируемой установки и подготовки `models/t-one`:
-
-```bash
-.venv/bin/python transcribe.py \
-  --input data/calls/1001/1001.wav \
-  --output data/calls/1001/1001.json \
-  --markdown-output data/calls/1001/1001.md \
-  --decoder greedy
-```
-
-На проверенной Windows-среде эквивалентная команда:
+Основной quality-режим на проверенном Windows/NVIDIA-хосте:
 
 ```powershell
 .venv\Scripts\python.exe transcribe.py `
-  --input data\calls\1001\1001.wav `
-  --output data\calls\1001\1001.json `
-  --markdown-output data\calls\1001\1001.md `
+  --input data\calls\1234\1234.wav `
+  --output data\calls\1234\1234.json `
+  --markdown-output data\calls\1234\1234.md `
+  --engine whisper `
+  --decoder beam_search
+```
+
+Для узкой терминологии можно передать только словарь терминов, без ожидаемых значений:
+
+```powershell
+--initial-prompt "БИК, ИНН, НКЦ, расчётный счёт, клиринг"
+```
+
+Фоновая обработка:
+
+```powershell
+.venv\Scripts\python.exe worker.py --mode once --engine whisper
+.venv\Scripts\python.exe worker.py --mode poll --engine whisper
+```
+
+Неудачная задача повторяется явно: `worker.py --mode once --requeue CALL_ID`. Готовый корректный JSON повторно не обрабатывается.
+
+## Лёгкий fallback
+
+T-one работает без GPU и остаётся доступен явно:
+
+```powershell
+.venv\Scripts\python.exe transcribe.py `
+  --input data\calls\1234\1234.wav `
+  --output data\calls\1234\1234.json `
+  --markdown-output data\calls\1234\1234.md `
+  --engine t-one `
+  --model-dir models\t-one `
   --decoder greedy
 ```
 
-Перед обработкой вне изолированной тестовой среды администратор должен включить запрет исходящей сети через `security/windows-deny-network.ps1`.
+T-one beam search на Windows не готов: для него нужны локальный `kenlm.bin` на 5,46 ГБ и проверенная сборка Python binding KenLM.
 
-Beam search является целевым decoder-ом, но требует локальный `kenlm.bin` размером 5 463 477 004 байта. На текущей маломощной машине фактически проверен только greedy.
+## Безопасность и перенос
 
-## Фоновая обработка
+- модель загружается только с локального пути;
+- исходное аудио не изменяется и не удаляется;
+- временные JSON whisper.cpp и WAV после декодирования AAC создаются внутри локального scratch-каталога результата и удаляются после разбора;
+- логи не содержат текст звонка;
+- перед корпоративными данными нужен OS-level deny-all egress;
+- модели, runtime, аудио, результаты, логи и `.venv` исключены из Git.
 
-Один проход по каталогу с устойчивой SQLite-очередью:
+После клонирования приватного репозитория артефакты подготавливаются заново через контролируемый внутренний источник. Подробности: [установка](docs/INSTALLATION.md), [качество](docs/QUALITY_EVALUATION.md), [безопасность](docs/SECURITY.md), [архитектура](docs/ARCHITECTURE.md).
 
-```bash
-.venv/bin/python worker.py --mode once --decoder greedy
+## Проверка
+
+```powershell
+.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
 Постоянная проверка каталога:
 
 ```bash
-.venv/bin/python worker.py --mode poll --decoder greedy
+.venv/bin/python worker.py --mode poll --engine whisper --decoder beam_search
 ```
 
 Основной сценарий:
@@ -122,3 +149,5 @@ Beam search является целевым decoder-ом, но требует л
   --input-json data/calls/bot1/bot1.json \
   --output-json data/calls/bot1/bot1.cleaned.json
 ```
+
+Проект не включает LLM, суммаризацию, диаризацию, CRM-специфичную интеграцию или UI. Для распознавания отдельная LLM не нужна; добавлять её для «исправления» реквизитов опасно без отдельного набора качества, потому что она может правдоподобно выдумывать значения. Reference API остаётся нейтральным loopback-only контрактом для технической команды.

@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -205,6 +206,25 @@ class QueueStoreTests(unittest.TestCase):
 
 
 class FolderWorkerTests(unittest.TestCase):
+    def test_worker_builds_default_engine_with_calls_scratch_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            config = WorkerConfig(
+                input_dir=root / "input",
+                calls_dir=root / "calls",
+                failed_dir=root / "failed",
+                database_path=root / "queue.sqlite3",
+                model_dir=root / "models",
+            )
+            engine = CountingEngine()
+            with patch("local_transcriber.worker.create_engine", return_value=engine) as create:
+                worker = FolderWorker(config)
+            try:
+                self.assertIs(worker.engine, engine)
+                self.assertEqual(create.call_args.kwargs["scratch_dir"], root / "calls" / ".tmp")
+            finally:
+                worker.close()
+
     def test_worker_reuses_one_engine_and_completes_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)

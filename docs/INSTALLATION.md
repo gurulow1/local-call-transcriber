@@ -2,7 +2,43 @@
 
 Документ описывает проверенную разработческую процедуру. Production должен получать код, wheels и веса через внутренний проверенный источник, а не напрямую из интернета.
 
-## 1. Staging с сетью
+## 0. Проверенный quality-путь: Windows x64 + NVIDIA
+
+Текущий основной путь использует официальный CUDA bundle `whisper.cpp v1.9.2` и GGML F16 `Whisper large-v3`. Нужны Windows x64, NVIDIA GPU/driver и около 4 ГБ свободного диска сверх окружения.
+
+После создания `.venv` установить проект и обязательный `miniaudio==1.61`, затем в отдельной staging-фазе:
+
+```powershell
+.venv\Scripts\python.exe scripts\prepare_whisper_cpp.py --allow-network-download
+.venv\Scripts\python.exe scripts\verify_model.py models\whisper-large-v3
+```
+
+Скрипт загружает официальный `whisper-cublas-12.4.0-bin-x64.zip` и `ggml-large-v3.bin`, проверяет зафиксированные размер/SHA-256 и публикует локальный manifest. Runtime не скачивает файлы и получает только локальные пути.
+
+Для AAC ADTS дополнительно нужен зафиксированный PyAV wheel из `requirements/aac.txt`; процедура загрузки во время staging и офлайн-установки приведена в разделе 1. Whisper декодирует AAC во временный mono PCM WAV 16 кГц внутри каталога результата и удаляет его после обработки.
+
+Одиночный запуск:
+
+```powershell
+.venv\Scripts\python.exe transcribe.py `
+  --input data\input\1234.wav `
+  --output data\output\1234.json `
+  --engine whisper `
+  --decoder beam_search `
+  --verify-model-hashes
+```
+
+`--verify-model-hashes` читает все 3,1 ГБ перед каждым новым engine и подходит для допуска/проверки, но обычно не нужен на каждый файл после read-only публикации проверенного bundle.
+
+После staging PowerShell от администратора должен заблокировать исходящую сеть для обоих runtime-процессов:
+
+```powershell
+powershell -NoProfile -File security\windows-deny-network.ps1
+```
+
+Текущий pinned whisper.cpp staging script намеренно отказывается работать на другой ОС. Для Linux/macOS нужен отдельный проверенный runtime bundle и новый ADR; T-one-процедура ниже остаётся fallback.
+
+## 1. Staging T-one с сетью
 
 Клонировать и pin-ить официальный код:
 
@@ -123,6 +159,7 @@ Beam-search bundle дополнительно скачивает 5 463 477 004 �
   --input data/calls/1234/1234.wav \
   --output data/calls/1234/1234.json \
   --markdown-output data/calls/1234/1234.md \
+  --engine t-one \
   --decoder greedy
 ```
 
@@ -133,6 +170,7 @@ Windows:
   --input data\calls\1234\1234.wav `
   --output data\calls\1234\1234.json `
   --markdown-output data\calls\1234\1234.md `
+  --engine t-one `
   --decoder greedy `
   --verify-model-hashes
 ```
@@ -141,24 +179,33 @@ Windows:
 
 ## 4. Очередь и режимы
 
+Основной Windows/NVIDIA-путь:
+
+```powershell
+.venv\Scripts\python.exe worker.py --mode once --engine whisper --decoder beam_search
+.venv\Scripts\python.exe worker.py --mode poll --engine whisper --decoder beam_search
+```
+
+Переносимый T-one fallback:
+
 ```bash
 # Один проход / ручная пакетная обработка
-.venv/bin/python worker.py --mode once --decoder greedy
+.venv/bin/python worker.py --mode once --engine t-one --decoder greedy
 
 # Постоянная периодическая проверка
-.venv/bin/python worker.py --mode poll --decoder greedy
+.venv/bin/python worker.py --mode poll --engine t-one --decoder greedy
 
 # Семантика «после появления»; сейчас реализована polling-ом
-.venv/bin/python worker.py --mode watch --decoder greedy
+.venv/bin/python worker.py --mode watch --engine t-one --decoder greedy
 
 # Запуск внешним cron/systemd timer ночью
-.venv/bin/python worker.py --mode batch --decoder greedy
+.venv/bin/python worker.py --mode batch --engine t-one --decoder greedy
 ```
 
 По умолчанию файл должен быть неизменным 5 секунд. Затем он без перекодирования перемещается из `data/input` в `data/calls/{call_id}/`; туда же публикуются `{call_id}.json` и `{call_id}.md`. SQLite находится в `data/queue.sqlite3`, технический лог — `logs/worker.log`. Failed job повторяется ограниченно только для временных классов; ручной повтор:
 
 ```bash
-.venv/bin/python worker.py --mode once --decoder greedy --requeue 1234
+.venv/bin/python worker.py --mode once --engine t-one --decoder greedy --requeue 1234
 ```
 
 ## 5. Тесты

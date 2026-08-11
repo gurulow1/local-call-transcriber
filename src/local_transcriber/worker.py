@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from .engine import AsrEngine, ToneEngine
+from .engine import AsrEngine, create_engine
 from .errors import TranscriberError
 from .queue import QueueConflictError, QueueJob, QueueStore
 from .service import SUPPORTED_EXTENSIONS, TranscriptionRequest, extract_call_id, transcribe_file
@@ -29,6 +29,9 @@ class WorkerConfig:
     failed_dir: Path
     database_path: Path
     model_dir: Path
+    engine_name: str = "whisper"
+    whisper_cli_path: Path | None = None
+    initial_prompt: str | None = None
     decoder: str = "beam_search"
     stable_seconds: float = 5.0
     poll_seconds: float = 2.0
@@ -113,7 +116,14 @@ class FolderWorker:
     ) -> None:
         self.config = config
         self.store = store or QueueStore(config.database_path)
-        self.engine = engine or ToneEngine(config.model_dir, decoder=config.decoder)
+        self.engine = engine or create_engine(
+            config.engine_name,
+            config.model_dir,
+            decoder=config.decoder,
+            scratch_dir=config.calls_dir / ".tmp",
+            whisper_cli_path=config.whisper_cli_path,
+            initial_prompt=config.initial_prompt,
+        )
         self.worker_id = worker_id or f"{os.getpid()}-{uuid.uuid4().hex[:12]}"
 
     def close(self) -> None:

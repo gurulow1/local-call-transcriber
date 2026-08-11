@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "name": "Whisper large-v3",
+  "version": "large-v3+ggml-f16",
+  "source": "https://huggingface.co/ggerganov/whisper.cpp",
+  "source_revision": "362722b3fdcd2300b58a8286933ead1c48619667",
+  "source_code": "https://github.com/ggml-org/whisper.cpp",
+  "source_code_revision": "306c88f4d1286aec1bf96e544632897886af5501",
+  "license": "MIT",
+  "files": {
+    "ggml-large-v3.bin": {
+      "size_bytes": 3095033483,
+      "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+    }
+  }
+}

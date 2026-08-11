@@ -13,13 +13,14 @@ try:
 except ModuleNotFoundError:  # Windows
     resource = None  # type: ignore[assignment]
 
+from .cli import default_whisper_cli_path
 from .worker import FolderWorker, WorkerConfig, configure_logging
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Local T-one folder worker with a durable SQLite queue")
+    parser = argparse.ArgumentParser(description="Local ASR folder worker with a durable SQLite queue")
     parser.add_argument(
         "--mode",
         choices=("once", "poll", "watch", "batch"),
@@ -37,7 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--failed-dir", type=Path, default=PROJECT_ROOT / "data" / "failed")
     parser.add_argument("--database", type=Path, default=PROJECT_ROOT / "data" / "queue.sqlite3")
-    parser.add_argument("--model-dir", type=Path, default=PROJECT_ROOT / "models" / "t-one")
+    parser.add_argument("--engine", choices=("whisper", "t-one"), default="whisper")
+    parser.add_argument("--model-dir", type=Path)
+    parser.add_argument("--whisper-cli", type=Path, default=default_whisper_cli_path())
+    parser.add_argument("--initial-prompt", help="Optional domain vocabulary hint")
     parser.add_argument("--log", type=Path, default=PROJECT_ROOT / "logs" / "worker.log")
     parser.add_argument("--decoder", choices=("beam_search", "greedy"), default="beam_search")
     parser.add_argument("--stable-seconds", type=float, default=5.0)
@@ -63,12 +67,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.max_attempts < 1 or args.retry_base_seconds < 0:
         raise SystemExit("max-attempts must be >= 1 and retry-base-seconds must be >= 0")
     configure_logging(args.log)
+    model_dir = args.model_dir or PROJECT_ROOT / "models" / (
+        "whisper-large-v3" if args.engine == "whisper" else "t-one"
+    )
     config = WorkerConfig(
         input_dir=args.input_dir,
         calls_dir=args.calls_dir,
         failed_dir=args.failed_dir,
         database_path=args.database,
-        model_dir=args.model_dir,
+        model_dir=model_dir,
+        engine_name=args.engine,
+        whisper_cli_path=args.whisper_cli,
+        initial_prompt=args.initial_prompt,
         decoder=args.decoder,
         stable_seconds=args.stable_seconds,
         poll_seconds=args.poll_seconds,

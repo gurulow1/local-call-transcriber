@@ -21,6 +21,7 @@ sandbox-exec -f security/macos-deny-network.sb \
   .venv/bin/python transcribe.py \
   --input data/input/1001_offline.wav \
   --output data/output/1001_offline.json \
+  --engine t-one \
   --decoder greedy
 ```
 
@@ -54,6 +55,17 @@ sandbox-exec -f security/macos-deny-network.sb \
 - `1001.wav` и upstream `test_call.flac` успешно обработаны локальным `model.onnx` в обычных новых процессах.
 - Во время отдельного FLAC-инференса PID опрашивался через `netstat -ano` каждые 50 мс; сетевых строк для процесса не наблюдалось, результат `completed` получен за 2,467 с.
 - Runtime выполнялся в среде без сетевого разрешения инструмента и с `deny_python_network()`/HF offline flags.
-- Добавлен `security/windows-deny-network.ps1`, создающий постоянное outbound-block правило для `.venv\Scripts\python.exe`. Применить его в текущей среде не удалось из-за отсутствия административных прав; синтаксис скрипта проверен.
+- Добавлен `security/windows-deny-network.ps1`, создающий постоянные outbound-block правила для `.venv\Scripts\python.exe` и, если подготовлен, `whisper-cli.exe`. Применить его в текущей среде не удалось из-за отсутствия административных прав; синтаксис скрипта проверен.
 
 Опрос `netstat` может пропустить очень короткое соединение и не заменяет ETW/WFP/NDR. До реальных данных Windows-запуск вне изолированной среды требует применения firewall-правила администратором и отдельной проверки заблокированных попыток.
+
+## Windows whisper.cpp 2026-08-11
+
+- официальный CUDA runtime archive whisper.cpp v1.9.2 и GGML F16 large-v3 получены только в явной staging-фазе;
+- архив и модель проверены по зафиксированным размеру/SHA-256;
+- wrapper передаёт `whisper-cli.exe` только локальные абсолютные пути, русский язык и параметры decoder-а через локальный UTF-8 response file;
+- временный JSON создаётся в `.tmp` внутри выходного каталога и удаляется после разбора;
+- `1001.wav` и `test_call.flac` успешно обработаны; SQLite-worker также завершил одну реальную ASR-задачу;
+- Python network guard не охватывает нативный subprocess, поэтому до корпоративных данных обязательно отдельное firewall-правило для `whisper-cli.exe` и наблюдение WFP/EDR/NDR.
+
+Полный захват сетевого поведения whisper.cpp ещё не выполнен; локальный успешный запуск сам по себе не доказывает отсутствие всех попыток egress.
