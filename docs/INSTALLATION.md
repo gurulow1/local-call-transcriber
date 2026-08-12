@@ -22,9 +22,11 @@
 - для Windows/NVIDIA скачивает проверенные whisper.cpp/CUDA и Whisper large-v3 (около 3,8 ГБ);
 - для CPU-пути скачивает проверенный архив T-one и `model.onnx`;
 - ставит фиксированные прямые runtime-зависимости, включая AAC decoder;
-- проверяет модель, открывает `data/input` и запускает worker.
+- проверяет модель по размеру/SHA-256 и выполняет локальные тесты;
+- на Windows запрашивает административное подтверждение и ставит outbound-block правила для управляемого Python и `whisper-cli.exe`;
+- только после успешной проверки и firewall открывает `data/input` и запускает worker.
 
-Повторный запуск не выполняет staging заново, если marker, окружение, импорты, модель и manifest на месте. Технический журнал сохраняется в `logs/setup.log`. One-click путь предназначен для локального пилота; production по-прежнему должен использовать внутренний полный hash-pinned wheelhouse/bundle и OS-level deny-all egress.
+Повторный запуск не выполняет staging заново, если marker, окружение и импорты на месте, а модель проходит повторную проверку размера/SHA-256 по manifest. На Windows firewall-правила также проверяются до каждого запуска worker. Технический журнал сохраняется в `logs/setup.log`. One-click путь предназначен для локального пилота; production по-прежнему должен использовать внутренний полный hash-pinned wheelhouse/bundle и OS-level deny-all egress.
 
 ## 0. Проверенный quality-путь: Windows x64 + NVIDIA
 
@@ -54,7 +56,7 @@
 
 `--verify-model-hashes` читает все 3,1 ГБ перед каждым новым engine и подходит для допуска/проверки, но обычно не нужен на каждый файл после read-only публикации проверенного bundle.
 
-После staging PowerShell от администратора должен заблокировать исходящую сеть для обоих runtime-процессов:
+One-click Windows-запуск делает этот шаг автоматически после staging и не запускает worker, если пользователь отклонил административное подтверждение. При ручной установке PowerShell от администратора должен заблокировать исходящую сеть для обоих runtime-процессов:
 
 ```powershell
 powershell -NoProfile -File security\windows-deny-network.ps1

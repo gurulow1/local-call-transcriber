@@ -136,12 +136,28 @@ def _runtime_ready(python: Path, engine: str) -> bool:
             and (PROJECT_ROOT / "models" / "whisper-large-v3" / "manifest.json").is_file()
             and any(runtime.rglob("whisper-cli.exe"))
             and _imports_work(python, ("av", "miniaudio"))
+            and _model_verifies(python, engine)
         )
     return (
         (PROJECT_ROOT / "models" / "t-one" / "model.onnx").is_file()
         and (PROJECT_ROOT / "models" / "t-one" / "manifest.json").is_file()
         and _imports_work(python, ("av", "miniaudio", "onnxruntime", "tone"))
+        and _model_verifies(python, engine)
     )
+
+
+def _model_verifies(python: Path, engine: str) -> bool:
+    model_dir = PROJECT_ROOT / "models" / ("whisper-large-v3" if engine == "whisper" else "t-one")
+    command = [str(python), str(PROJECT_ROOT / "scripts" / "verify_model.py"), str(model_dir)]
+    if engine == "t-one":
+        command.append("--greedy-only")
+    return subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
 
 
 def _install_packages(uv: Path, python: Path, packages: Sequence[str]) -> None:
@@ -174,6 +190,25 @@ def _write_marker(engine: str) -> None:
     )
 
 
+def _run_tests(python: Path) -> None:
+    print("Running local self-tests before the first worker start...")
+    _run((python, "-m", "unittest", "discover", "-s", "tests", "-v"))
+
+
+def _ensure_runtime(uv: Path, python: Path, engine: str) -> None:
+    if _runtime_ready(python, engine):
+        print("Verified local runtime is ready.")
+        return
+    print("First launch or repair: downloading and verifying the local runtime.")
+    if engine == "whisper":
+        _prepare_whisper(uv, python)
+    else:
+        _prepare_tone(uv, python)
+    _run_tests(python)
+    _write_marker(engine)
+    print("Installation and self-tests completed.")
+
+
 def _open_input_folder() -> None:
     input_dir = PROJECT_ROOT / "data" / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -192,19 +227,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uv", required=True, type=Path)
     parser.add_argument("--profile", choices=("windows-auto", "cpu"), required=True)
+    parser.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="Verify or prepare the runtime, then exit before starting the worker",
+    )
     args = parser.parse_args()
     uv = args.uv.resolve(strict=True)
     python = Path(sys.executable).resolve(strict=True)
     engine = choose_engine(args.profile)
 
-    if not _runtime_ready(python, engine):
-        print("First launch: downloading and verifying the local runtime.")
-        if engine == "whisper":
-            _prepare_whisper(uv, python)
-        else:
-            _prepare_tone(uv, python)
-        _write_marker(engine)
-        print("Installation completed.")
+    _ensure_runtime(uv, python, engine)
+    if args.prepare_only:
+        return 0
 
     decoder = "beam_search" if engine == "whisper" else "greedy"
     print(f"Transcriber started: engine={engine}, decoder={decoder}")

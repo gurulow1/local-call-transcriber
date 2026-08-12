@@ -37,6 +37,8 @@ class ArchiveLauncherTests(unittest.TestCase):
         self.assertIn('Join-Path $StageDir "uv.exe"', powershell)
         self.assertIn('Join-Path $CacheDir "venv"', powershell)
         self.assertIn("--profile windows-auto", powershell)
+        self.assertLess(powershell.index("--prepare-only"), powershell.index("windows-deny-network.ps1"))
+        self.assertLess(powershell.index("windows-deny-network.ps1"), powershell.rindex("bootstrap_runtime.py"))
         self.assertIn("f830ea3d38ae1492acf53cb7f2cd0f81d6ae22b42d2d7310a6c7d42c451e1a43", linux)
         self.assertIn(".poetry-cache/venv", linux)
         self.assertIn("--profile cpu", linux)
@@ -75,10 +77,66 @@ class ArchiveLauncherTests(unittest.TestCase):
             )
             with mock.patch.object(bootstrap, "PROJECT_ROOT", root), mock.patch.object(
                 bootstrap, "RUNTIME_MARKER", marker
-            ), mock.patch.object(bootstrap, "_imports_work", return_value=True):
+            ), mock.patch.object(bootstrap, "_imports_work", return_value=True), mock.patch.object(
+                bootstrap, "_model_verifies", return_value=True
+            ):
                 self.assertFalse(bootstrap._runtime_ready(Path(sys.executable), "t-one"))
                 (model_dir / "manifest.json").write_text("{}", encoding="utf-8")
                 self.assertTrue(bootstrap._runtime_ready(Path(sys.executable), "t-one"))
+
+    def test_ready_runtime_rejects_a_model_that_fails_hash_verification(self) -> None:
+        bootstrap = _load_bootstrap()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_dir = root / "models" / "t-one"
+            model_dir.mkdir(parents=True)
+            (model_dir / "model.onnx").touch()
+            (model_dir / "manifest.json").write_text("{}", encoding="utf-8")
+            marker = root / "runtime.json"
+            marker.write_text(
+                '{"setup_version": "archive-bootstrap-v1", "engine": "t-one"}',
+                encoding="utf-8",
+            )
+            with mock.patch.object(bootstrap, "PROJECT_ROOT", root), mock.patch.object(
+                bootstrap, "RUNTIME_MARKER", marker
+            ), mock.patch.object(bootstrap, "_imports_work", return_value=True), mock.patch.object(
+                bootstrap, "_model_verifies", return_value=False
+            ):
+                self.assertFalse(bootstrap._runtime_ready(Path(sys.executable), "t-one"))
+
+    def test_first_setup_runs_self_tests_before_publishing_marker(self) -> None:
+        bootstrap = _load_bootstrap()
+        events: list[str] = []
+        with mock.patch.object(bootstrap, "_runtime_ready", return_value=False), mock.patch.object(
+            bootstrap, "_prepare_tone", side_effect=lambda *args: events.append("prepare")
+        ), mock.patch.object(bootstrap, "_run_tests", side_effect=lambda *args: events.append("tests")), mock.patch.object(
+            bootstrap, "_write_marker", side_effect=lambda *args: events.append("marker")
+        ):
+            bootstrap._ensure_runtime(Path("uv"), Path(sys.executable), "t-one")
+
+        self.assertEqual(events, ["prepare", "tests", "marker"])
+
+    def test_prepare_only_never_starts_the_worker(self) -> None:
+        bootstrap = _load_bootstrap()
+        with tempfile.NamedTemporaryFile() as uv, mock.patch.object(
+            sys,
+            "argv",
+            ["bootstrap_runtime.py", "--uv", uv.name, "--profile", "cpu", "--prepare-only"],
+        ), mock.patch.object(bootstrap, "_ensure_runtime") as ensure_runtime, mock.patch.object(
+            bootstrap.subprocess, "run"
+        ) as run:
+            self.assertEqual(bootstrap.main(), 0)
+
+        ensure_runtime.assert_called_once()
+        run.assert_not_called()
+
+    def test_windows_firewall_targets_the_managed_archive_python(self) -> None:
+        firewall = (PROJECT_ROOT / "security" / "windows-deny-network.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("$PythonPath", firewall)
+        self.assertIn(".poetry-cache\\venv\\Scripts\\python.exe", firewall)
+        self.assertIn("whisper-cli.exe", firewall)
+        self.assertIn("Remove-NetFirewallRule", firewall)
 
     @unittest.skipUnless(shutil.which("bash"), "bash is unavailable on this platform")
     def test_linux_launcher_has_valid_bash_syntax(self) -> None:

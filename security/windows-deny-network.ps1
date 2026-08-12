@@ -1,7 +1,24 @@
 #requires -RunAsAdministrator
 
+param(
+    [string] $PythonPath
+)
+
 $ErrorActionPreference = "Stop"
-$python = (Resolve-Path -LiteralPath "$PSScriptRoot\..\.venv\Scripts\python.exe").Path
+if ([string]::IsNullOrWhiteSpace($PythonPath)) {
+    $ManagedPython = "$PSScriptRoot\..\.poetry-cache\venv\Scripts\python.exe"
+    $DeveloperPython = "$PSScriptRoot\..\.venv\Scripts\python.exe"
+    if (Test-Path -LiteralPath $ManagedPython -PathType Leaf) {
+        $PythonPath = $ManagedPython
+    }
+    elseif (Test-Path -LiteralPath $DeveloperPython -PathType Leaf) {
+        $PythonPath = $DeveloperPython
+    }
+    else {
+        throw "Local transcriber Python runtime was not found."
+    }
+}
+$python = (Resolve-Path -LiteralPath $PythonPath).Path
 $targets = @(
     @{
         Name = "Local Call Transcriber - Block Outbound"
@@ -22,17 +39,23 @@ if ($whisper) {
 foreach ($target in $targets) {
     $existing = Get-NetFirewallRule -DisplayName $target.Name -ErrorAction SilentlyContinue
     if ($existing) {
-        $program = ($existing | Get-NetFirewallApplicationFilter).Program
+        $existingRules = @($existing)
+        $applicationFilters = @($existing | Get-NetFirewallApplicationFilter)
+        $program = $applicationFilters.Program
         if (
+            $existingRules.Count -ne 1 -or
+            $applicationFilters.Count -ne 1 -or
             $program -ne $target.Program -or
             $existing.Direction -ne "Outbound" -or
             $existing.Action -ne "Block" -or
             $existing.Enabled -ne "True" -or
             $existing.Profile -ne "Any"
         ) {
-            throw "Firewall rule '$($target.Name)' exists with unexpected settings."
+            $existing | Remove-NetFirewallRule
+            $existing = $null
         }
-    } else {
+    }
+    if (-not $existing) {
         New-NetFirewallRule `
             -DisplayName $target.Name `
             -Description $target.Description `

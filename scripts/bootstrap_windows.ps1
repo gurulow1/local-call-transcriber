@@ -85,6 +85,31 @@ try {
         }
     }
 
+    & $PythonExe scripts\bootstrap_runtime.py --uv $UvExe --profile windows-auto --prepare-only
+    if ($LASTEXITCODE -ne 0) {
+        throw "Transcriber setup stopped with exit code $LASTEXITCODE."
+    }
+
+    Write-Host "Applying outbound firewall rules (Windows will request administrator approval)..."
+    $FirewallScript = Join-Path $ProjectDir "security\windows-deny-network.ps1"
+    $ElevatedPowerShell = Join-Path $PSHOME "powershell.exe"
+    $FirewallArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + `
+        $FirewallScript + '" -PythonPath "' + $PythonExe + '"'
+    try {
+        $FirewallProcess = Start-Process `
+            -FilePath $ElevatedPowerShell `
+            -Verb RunAs `
+            -ArgumentList $FirewallArguments `
+            -Wait `
+            -PassThru
+    }
+    catch {
+        throw "Administrator approval for the outbound firewall was not granted. The worker was not started."
+    }
+    if ($FirewallProcess.ExitCode -ne 0) {
+        throw "Outbound firewall setup failed with exit code $($FirewallProcess.ExitCode). The worker was not started."
+    }
+
     & $PythonExe scripts\bootstrap_runtime.py --uv $UvExe --profile windows-auto
     if ($LASTEXITCODE -ne 0) {
         throw "Transcriber stopped with exit code $LASTEXITCODE."
