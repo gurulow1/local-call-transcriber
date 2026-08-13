@@ -1,5 +1,7 @@
 # Локальный транскрибатор звонков
 
+[![Tests](https://github.com/gurulow1/local-call-transcriber/actions/workflows/tests.yml/badge.svg)](https://github.com/gurulow1/local-call-transcriber/actions/workflows/tests.yml)
+
 Автономный CLI и SQLite-worker для русской речи:
 
 ```text
@@ -59,7 +61,7 @@ data/input/1234.wav
 
 ## Перенос на другой компьютер
 
-Приватный GitHub-репозиторий хранит только код, документацию, тесты и manifests:
+Публичный showcase-репозиторий хранит только код, документацию, тесты и безопасные manifests; модели, аудио, результаты и локальные окружения в Git не публикуются:
 
 ```bash
 git clone https://github.com/gurulow1/local-call-transcriber.git
@@ -129,7 +131,7 @@ T-one beam search на Windows не готов: для него нужны ло�
 - перед корпоративными данными нужен OS-level deny-all egress;
 - модели, runtime, аудио, результаты, логи и `.venv` исключены из Git.
 
-После клонирования приватного репозитория артефакты подготавливаются заново через контролируемый внутренний источник. Подробности: [установка](docs/INSTALLATION.md), [качество](docs/QUALITY_EVALUATION.md), [безопасность](docs/SECURITY.md), [архитектура](docs/ARCHITECTURE.md).
+После клонирования репозитория runtime-артефакты подготавливаются заново через контролируемый источник. Код обвязки объявлен proprietary в `pyproject.toml`; публикация исходников не предоставляет лицензию на их повторное распространение. Условия сторонних компонентов перечислены в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Подробности: [установка](docs/INSTALLATION.md), [качество](docs/QUALITY_EVALUATION.md), [безопасность](docs/SECURITY.md), [архитектура](docs/ARCHITECTURE.md).
 
 ## Проверка
 
