@@ -13,21 +13,26 @@
     "source_revision": "example-model-revision",
     "source_code_revision": "example-code-revision",
     "decoder": "greedy",
-    "local_path": "/srv/local-call-transcriber/models/t-one"
+    "local_path": "t-one",
+    "vad_name": null,
+    "vad_version": null,
+    "vad_source_revision": null,
+    "vad_sha256": null,
+    "vad_threshold": null
   },
-  "text": "Здравствуйте. Проверяем локальную расшифровку.",
-  "raw_text": "здравствуйте проверяем локальную расшифровку",
+  "text": "Здравствуйте, проверяем локальную расшифровку.",
+  "raw_text": "здравствуйте, проверяем локальную расшифровку",
   "segments": [
     {
       "start": 0.0,
       "end": 4.0,
-      "text": "Здравствуйте. Проверяем локальную расшифровку.",
-      "asr_text": "здравствуйте проверяем локальную расшифровку"
+      "text": "Здравствуйте, проверяем локальную расшифровку.",
+      "asr_text": "здравствуйте, проверяем локальную расшифровку"
     }
   ],
   "postprocessing": {
-    "method": "deterministic_glossary_v1",
-    "glossary_version": "1",
+    "method": "deterministic_glossary_v2",
+    "glossary_version": "2",
     "term_replacements": 0,
     "phrase_replacements": 0
   },

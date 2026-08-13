@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -16,8 +17,9 @@ from local_transcriber.service import SCHEMA_VERSION, TranscriptionRequest, tran
 
 
 class FakeEngine:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(self, *, fail: bool = False, result: EngineResult | None = None) -> None:
         self._fail = fail
+        self._result = result
 
     @property
     def model_info(self) -> EngineModelInfo:
@@ -33,7 +35,7 @@ class FakeEngine:
     def transcribe(self, input_path: Path) -> EngineResult:
         if self._fail:
             raise InferenceError("synthetic inference failure")
-        return EngineResult(
+        return self._result or EngineResult(
             duration_seconds=2.5,
             segments=(
                 Segment(start=0.1, end=0.8, text="тестовая"),
@@ -70,19 +72,22 @@ class TranscriptionServiceTests(unittest.TestCase):
             self.assertEqual(result["source_audio"], "1234.wav")
             self.assertEqual(result["language"], "ru")
             self.assertEqual(result["duration_seconds"], 2.5)
-            self.assertEqual(result["text"], "Тестовая. Запись.")
+            self.assertEqual(result["text"], "Тестовая запись.")
             self.assertEqual(result["raw_text"], "тестовая запись")
             self.assertEqual(len(result["segments"]), 2)
             self.assertEqual(result["segments"][0]["asr_text"], "тестовая")
-            self.assertEqual(result["segments"][0]["text"], "Тестовая.")
-            self.assertEqual(result["postprocessing"]["method"], "deterministic_glossary_v1")
+            self.assertEqual(result["segments"][0]["text"], "Тестовая")
+            self.assertEqual(result["postprocessing"]["method"], "deterministic_glossary_v2")
             self.assertEqual(result["model"]["name"], "T-one")
+            self.assertIsNone(result["model"]["vad_name"])
             self.assertIsNone(result["error"])
             self.assertEqual(json.loads(output.read_text(encoding="utf-8")), result)
             markdown = markdown_output.read_text(encoding="utf-8")
             self.assertIn("# Расшифровка: 1234", markdown)
-            self.assertIn("[Открыть исходное аудио](./1234.wav)", markdown)
-            self.assertIn("Тестовая. Запись.", markdown)
+            self.assertIn("[Открыть исходное аудио](../1234.wav)", markdown)
+            self.assertIn("Тестовая запись.", markdown)
+            self.assertIn("RTF", markdown)
+            self.assertIn("test-model-revision", markdown)
             self.assertEqual(source.read_bytes(), original_bytes)
             self.assertEqual(source.stat().st_mtime_ns, original_stat.st_mtime_ns)
             self.assertEqual(list(output.parent.glob("*.tmp")), [])
@@ -103,6 +108,126 @@ class TranscriptionServiceTests(unittest.TestCase):
                 self.assertEqual(result["status"], "completed")
                 self.assertEqual(result["call_id"], "call-42")
 
+    def test_unsupported_extension_does_not_publish_an_invalid_failure_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            source = root / "call-42.m4a"
+            source.write_bytes(b"placeholder")
+            output = root / "call-42.json"
+
+            result = transcribe_file(
+                TranscriptionRequest(source, output, root / "models"),
+                engine=FakeEngine(),
+            )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["error"]["type"], "InputValidationError")
+            self.assertFalse(output.exists())
+
+    def test_segment_end_is_limited_to_audio_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            source = root / "1234.wav"
+            source.write_bytes(b"placeholder")
+            output = root / "1234.json"
+            engine_result = EngineResult(
+                duration_seconds=2.5,
+                segments=(Segment(start=0.1, end=30.0, text="фраза"),),
+            )
+
+            result = transcribe_file(
+                TranscriptionRequest(source, output, root / "models"),
+                engine=FakeEngine(result=engine_result),
+            )
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["segments"][0]["end"], 2.5)
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8")), result)
+
+    def test_duration_below_contract_precision_is_not_published_as_completed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            source = root / "tiny.wav"
+            source.write_bytes(b"placeholder")
+            output = root / "tiny.json"
+
+            result = transcribe_file(
+                TranscriptionRequest(source, output, root / "models"),
+                engine=FakeEngine(
+                    result=EngineResult(duration_seconds=0.0004, segments=()),
+                ),
+            )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["error"]["type"], "InputValidationError")
+            self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["status"], "failed")
+
+    def test_uppercase_supported_extension_matches_the_result_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            source = root / "CALL.WaV"
+            source.write_bytes(b"placeholder")
+            output = root / "CALL.json"
+
+            result = transcribe_file(
+                TranscriptionRequest(source, output, root / "models"),
+                engine=FakeEngine(),
+            )
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["source_audio"], "CALL.WaV")
+
+    def test_invalid_segment_timestamps_fail_with_strict_json(self) -> None:
+        invalid_segments = (
+            Segment(start=float("nan"), end=1.0, text="nan"),
+            Segment(start=-0.1, end=1.0, text="negative"),
+            Segment(start=1.0, end=0.5, text="reversed"),
+        )
+        for index, segment in enumerate(invalid_segments):
+            with self.subTest(segment=segment), tempfile.TemporaryDirectory() as temporary_dir:
+                root = Path(temporary_dir)
+                source = root / f"call-{index}.wav"
+                source.write_bytes(b"placeholder")
+                output = root / f"call-{index}.json"
+
+                result = transcribe_file(
+                    TranscriptionRequest(source, output, root / "models"),
+                    engine=FakeEngine(
+                        result=EngineResult(duration_seconds=2.5, segments=(segment,)),
+                    ),
+                )
+
+                serialized = output.read_text(encoding="utf-8")
+                payload = json.loads(
+                    serialized,
+                    parse_constant=lambda value: self.fail(f"non-finite JSON number: {value}"),
+                )
+                self.assertEqual(result["status"], "failed")
+                self.assertEqual(payload["status"], "failed")
+                self.assertEqual(payload["segments"], [])
+
+    def test_vad_model_path_is_forwarded_to_engine_factory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            source = root / "1234.wav"
+            source.write_bytes(b"placeholder")
+            output = root / "1234.json"
+            vad_model = root / "vad.bin"
+            vad_model.write_bytes(b"test-vad")
+
+            with patch("local_transcriber.service.create_engine", return_value=FakeEngine()) as create:
+                result = transcribe_file(
+                    TranscriptionRequest(
+                        source,
+                        output,
+                        root / "models",
+                        vad_model_path=vad_model,
+                    ),
+                )
+
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(create.call_args.kwargs["vad_model_path"], vad_model)
+
     def test_output_name_must_match_call_id(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)
@@ -117,7 +242,7 @@ class TranscriptionServiceTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["error"]["type"], "OutputValidationError")
-            self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["status"], "failed")
+            self.assertFalse(output.exists())
 
     def test_unsafe_call_id_fails_without_invoking_engine(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -133,6 +258,8 @@ class TranscriptionServiceTests(unittest.TestCase):
 
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["error"]["type"], "InputValidationError")
+            self.assertEqual(result["call_id"], "unknown")
+            self.assertFalse(output.exists())
 
     def test_existing_result_is_not_overwritten_implicitly(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:

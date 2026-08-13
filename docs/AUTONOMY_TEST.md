@@ -55,7 +55,7 @@ sandbox-exec -f security/macos-deny-network.sb \
 - `1001.wav` и upstream `test_call.flac` успешно обработаны локальным `model.onnx` в обычных новых процессах.
 - Во время отдельного FLAC-инференса PID опрашивался через `netstat -ano` каждые 50 мс; сетевых строк для процесса не наблюдалось, результат `completed` получен за 2,467 с.
 - Runtime выполнялся в среде без сетевого разрешения инструмента и с `deny_python_network()`/HF offline flags.
-- Добавлен `security/windows-deny-network.ps1`, создающий постоянные outbound-block правила для `.venv\Scripts\python.exe` и, если подготовлен, `whisper-cli.exe`. Применить его в текущей среде не удалось из-за отсутствия административных прав; синтаксис скрипта проверен.
+- Добавлен `security/windows-deny-network.ps1`, создающий постоянные outbound-block правила для архивного `.poetry-cache\venv\Scripts\python.exe`, разработческого `.venv\Scripts\python.exe` и, если подготовлен, `whisper-cli.exe`. 2026-08-14 правила применены на текущем Windows-хосте; полный preflight подтвердил точные пути и параметры. Неадминистративный `-CheckOnly` читает machine-wide правила через Windows Firewall COM policy, потому что hardened CIM-политика этого хоста запрещает обычному пользователю даже read-only `Get-NetFirewallRule`.
 
 Опрос `netstat` может пропустить очень короткое соединение и не заменяет ETW/WFP/NDR. До реальных данных Windows-запуск вне изолированной среды требует применения firewall-правила администратором и отдельной проверки заблокированных попыток.
 

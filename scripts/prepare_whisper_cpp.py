@@ -25,6 +25,12 @@ MODEL_URL = (
 )
 MODEL_SIZE = 3_095_033_483
 MODEL_SHA256 = "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+VAD_URL = (
+    "https://huggingface.co/ggml-org/whisper-vad/resolve/"
+    "e5614ed76a5dd4b03fad5068c89efcd2617a9d1e/ggml-silero-v5.1.2.bin"
+)
+VAD_SIZE = 885_098
+VAD_SHA256 = "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
 
 
 def _download(url: str, destination: Path, size: int, sha256: str) -> None:
@@ -82,6 +88,11 @@ def main() -> int:
         type=Path,
         default=PROJECT_ROOT / "models" / "whisper-large-v3",
     )
+    parser.add_argument(
+        "--vad-target",
+        type=Path,
+        default=PROJECT_ROOT / "models" / "whisper-vad",
+    )
     args = parser.parse_args()
     if not args.allow_network_download:
         parser.error("refusing network staging without --allow-network-download")
@@ -90,6 +101,7 @@ def main() -> int:
 
     runtime_target = args.runtime_target.resolve(strict=False)
     model_target = args.model_target.resolve(strict=False)
+    vad_target = args.vad_target.resolve(strict=False)
     with tempfile.TemporaryDirectory(dir=PROJECT_ROOT, prefix=".whisper-stage-") as staging:
         runtime_archive = Path(staging) / "whisper-runtime.zip"
         _download(RUNTIME_URL, runtime_archive, RUNTIME_SIZE, RUNTIME_SHA256)
@@ -101,11 +113,18 @@ def main() -> int:
         PROJECT_ROOT / "models" / "whisper-large-v3.manifest.example.json",
         model_target / "manifest.json",
     )
+    vad_path = vad_target / "ggml-silero-v5.1.2.bin"
+    _download(VAD_URL, vad_path, VAD_SIZE, VAD_SHA256)
+    shutil.copyfile(
+        PROJECT_ROOT / "models" / "whisper-vad.manifest.example.json",
+        vad_target / "manifest.json",
+    )
     executable = next(runtime_target.rglob("whisper-cli.exe"), None)
     if executable is None:
         raise SystemExit("whisper-cli.exe was not found in the verified runtime archive")
     print(f"runtime: {executable}")
     print(f"model: {model_target}")
+    print(f"vad: {vad_target}")
     return 0
 
 

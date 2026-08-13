@@ -49,7 +49,7 @@
 
 Пример для Linux должен быть адаптирован безопасниками к среде: отдельный namespace без интерфейса либо firewall-правило deny-all для UID сервиса, плюс `tcpdump -i any`. На macOS возможны отдельный sandbox/VM и Packet Filter. Конкретные команды не фиксируются до выбора промышленной ОС.
 
-Для проверенной Windows dev/pilot-среды добавлен `security/windows-deny-network.ps1`: после сетевого staging администратор создаёт отдельные outbound-block правила для фактического Python (`.poetry-cache\venv\Scripts\python.exe` в архивном запуске либо `.venv\Scripts\python.exe` в ручной dev-установке) и нативного `whisper-cli.exe`. One-click запуск требует успешной установки этих правил до worker. Это защита dev/pilot-хоста, а не замена корпоративной WFP/EDR/NDR-политики.
+Для проверенной Windows dev/pilot-среды добавлен `security/windows-deny-network.ps1`: после сетевого staging администратор создаёт отдельные outbound-block правила для фактически существующих абсолютных путей архивного `.poetry-cache\venv\Scripts\python.exe`, разработческого `.venv\Scripts\python.exe` и нативного `whisper-cli.exe`. One-click запуск требует успешной установки этих правил до worker. Режим `-CheckOnly` доступен без elevation и через Windows Firewall COM API проверяет точные параметры правил. Это защита dev/pilot-хоста, а не замена корпоративной WFP/EDR/NDR-политики.
 
 ## Хранение, доступ, удаление
 

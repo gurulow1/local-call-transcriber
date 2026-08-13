@@ -6,7 +6,11 @@ from typing import Any, Mapping
 from urllib.parse import quote
 
 
-def render_transcript_markdown(result: Mapping[str, Any]) -> str:
+def render_transcript_markdown(
+    result: Mapping[str, Any],
+    *,
+    audio_href: str | None = None,
+) -> str:
     """Render a compact report without changing or reinterpreting transcript text."""
 
     if result.get("status") != "completed":
@@ -19,20 +23,27 @@ def render_transcript_markdown(result: Mapping[str, Any]) -> str:
     model_name = _table_value(model.get("name", ""))
     model_version = _table_value(model.get("version", ""))
     decoder = _table_value(model.get("decoder", ""))
+    model_revision = _table_value(model.get("source_revision", ""))
+    processing_seconds = _number(result.get("processing_seconds"))
+    real_time_factor = _number(result.get("real_time_factor"))
+    completed_at = _table_value(result.get("completed_at", ""))
     text = str(result.get("text", "")).strip()
     segments = result.get("segments") if isinstance(result.get("segments"), list) else []
 
     lines = [
         f"# Расшифровка: {call_id}",
         "",
-        f"[Открыть исходное аудио](./{quote(source_audio)})",
+        f"[Открыть исходное аудио]({quote(audio_href or './' + source_audio, safe='/:')})",
         "",
         "| Сведения | Значение |",
         "|---|---|",
         f"| Аудио | `{_inline_code(source_audio)}` |",
         f"| Длительность | {duration} |",
         f"| Модель | {model_name} {model_version} |".rstrip(),
+        f"| Ревизия модели | `{_inline_code(model_revision)}` |",
         f"| Декодер | {decoder} |",
+        f"| Обработка | {processing_seconds:.3f} с; RTF {real_time_factor:.4f} |",
+        f"| Завершено (UTC) | {completed_at} |",
         "",
         "## Текст",
         "",
@@ -89,3 +100,10 @@ def _table_value(value: object) -> str:
 
 def _inline_code(value: str) -> str:
     return value.replace("`", "'")
+
+
+def _number(value: object) -> float:
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 0.0

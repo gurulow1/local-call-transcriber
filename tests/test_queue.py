@@ -206,6 +206,79 @@ class QueueStoreTests(unittest.TestCase):
 
 
 class FolderWorkerTests(unittest.TestCase):
+    def test_drain_recovers_expired_leases_between_backlog_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            worker = FolderWorker(
+                WorkerConfig(
+                    input_dir=root / "input",
+                    calls_dir=root / "calls",
+                    failed_dir=root / "failed",
+                    database_path=root / "queue.sqlite3",
+                    model_dir=root / "models",
+                ),
+                engine=CountingEngine(),
+            )
+            try:
+                with patch.object(
+                    worker.store,
+                    "recover_expired",
+                    side_effect=((0, 0), (1, 0), (0, 0)),
+                ) as recover, patch.object(
+                    worker,
+                    "process_one",
+                    side_effect=(True, True, False),
+                ):
+                    self.assertEqual(worker.drain(), 2)
+                self.assertEqual(recover.call_count, 3)
+            finally:
+                worker.close()
+
+    def test_scan_marks_rejected_regular_files_without_moving_them(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            unsupported = input_dir / "notes.txt"
+            unsafe = input_dir / "bad name.wav"
+            internal_part = input_dir / ".crm-upload-test.part"
+            unsupported.write_bytes(b"not audio")
+            unsafe.write_bytes(b"not audio")
+            internal_part.write_bytes(b"partial")
+            worker = FolderWorker(
+                WorkerConfig(
+                    input_dir=input_dir,
+                    calls_dir=root / "calls",
+                    failed_dir=root / "failed",
+                    database_path=root / "queue.sqlite3",
+                    model_dir=root / "models",
+                ),
+                engine=CountingEngine(),
+            )
+            try:
+                with patch("local_transcriber.worker.os.replace", wraps=__import__("os").replace) as replace:
+                    worker.scan(now=0.0)
+                    writes_after_first_scan = replace.call_count
+                    worker.scan(now=1.0)
+                    self.assertEqual(replace.call_count, writes_after_first_scan)
+            finally:
+                worker.close()
+
+            self.assertEqual(unsupported.read_bytes(), b"not audio")
+            self.assertEqual(unsafe.read_bytes(), b"not audio")
+            self.assertEqual(internal_part.read_bytes(), b"partial")
+            markers = [
+                json.loads(path.read_text(encoding="utf-8"))
+                for path in (root / "failed").glob("rejected-*.json")
+            ]
+            self.assertEqual(len(markers), 2)
+            by_filename = {marker["filename"]: marker for marker in markers}
+            self.assertEqual(
+                by_filename["notes.txt"]["error_type"],
+                "UnsupportedAudioExtension",
+            )
+            self.assertEqual(by_filename["bad name.wav"]["error_type"], "InvalidCallId")
+
     def test_worker_builds_default_engine_with_calls_scratch_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)

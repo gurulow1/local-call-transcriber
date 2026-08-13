@@ -53,11 +53,12 @@ GET /v1/jobs/{call_id}/result
 - `completed` содержит текст и может содержать сегменты;
 - `text` — детерминированно очищенная версия, `raw_text` — неизменная склейка выдачи ASR;
 - каждый сегмент содержит очищенный `text` и исходный `asr_text`; таймкоды при постобработке не меняются;
-- `postprocessing` фиксирует метод, версию словаря и число применённых замен;
+- `postprocessing` фиксирует метод, версию словаря и число применённых замен; текущий pipeline пишет `deterministic_glossary_v2`, схема продолжает читать legacy `v1`;
 - `failed` содержит `error.type` и безопасное `error.message`, без stack trace и текста звонка;
 - таймкоды — секунды от начала аудио, числа `>= 0`, конец не меньше начала;
 - `schema_version` изменяется по правилам semver контракта: несовместимое изменение — новая major;
-- `model.name`, `model.version` и идентификатор локального артефакта обязательны для воспроизводимости;
+- `model.name`, `model.version` и логический идентификатор bundle в `model.local_path` обязательны для воспроизводимости; абсолютный host path наружу не публикуется;
+- Whisper-результат фиксирует VAD name/version/source revision/SHA-256/threshold; для T-one эти поля равны `null`;
 - повторный запрос/чтение успешно завершённой версии идемпотентны;
 - повторная загрузка занятого `call_id` не перезаписывает аудио и возвращает `409`;
 - статус endpoint не раскрывает локальные пути, текст звонка или аудио;
@@ -73,13 +74,21 @@ GET /v1/jobs/{call_id}/result
   "status": "completed",
   "source_audio": "1234.wav",
   "language": "ru",
-  "duration_seconds": 0.0,
-  "processing_seconds": 0.0,
-  "real_time_factor": 0.0,
+  "duration_seconds": 4.2,
+  "processing_seconds": 2.1,
+  "real_time_factor": 0.5,
   "model": {
     "name": "Whisper large-v3",
-    "version": "",
-    "local_path": ""
+    "version": "large-v3+ggml-f16",
+    "source_revision": "362722b3fdcd2300b58a8286933ead1c48619667",
+    "source_code_revision": "306c88f4d1286aec1bf96e544632897886af5501",
+    "decoder": "beam_search",
+    "local_path": "whisper-large-v3",
+    "vad_name": "Silero VAD",
+    "vad_version": "v5.1.2",
+    "vad_source_revision": "e5614ed76a5dd4b03fad5068c89efcd2617a9d1e",
+    "vad_sha256": "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf",
+    "vad_threshold": 0.5
   },
   "text": "Очищенная фраза.",
   "raw_text": "очищенная фраза",
@@ -92,13 +101,13 @@ GET /v1/jobs/{call_id}/result
     }
   ],
   "postprocessing": {
-    "method": "deterministic_glossary_v1",
-    "glossary_version": "1",
+    "method": "deterministic_glossary_v2",
+    "glossary_version": "2",
     "term_replacements": 0,
     "phrase_replacements": 0
   },
-  "created_at": "",
-  "completed_at": "",
+  "created_at": "2026-08-13T12:00:00.000Z",
+  "completed_at": "2026-08-13T12:00:02.100Z",
   "error": null
 }
 ```

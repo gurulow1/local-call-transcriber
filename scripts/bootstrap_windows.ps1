@@ -87,7 +87,7 @@ try {
 
     & $PythonExe scripts\bootstrap_runtime.py --uv $UvExe --profile windows-auto --prepare-only
     if ($LASTEXITCODE -ne 0) {
-        throw "Transcriber setup stopped with exit code $LASTEXITCODE."
+        throw "Runtime preparation stopped with exit code $LASTEXITCODE."
     }
 
     Write-Host "Applying outbound firewall rules (Windows will request administrator approval)..."
@@ -109,11 +109,6 @@ try {
     if ($FirewallProcess.ExitCode -ne 0) {
         throw "Outbound firewall setup failed with exit code $($FirewallProcess.ExitCode). The worker was not started."
     }
-
-    & $PythonExe scripts\bootstrap_runtime.py --uv $UvExe --profile windows-auto
-    if ($LASTEXITCODE -ne 0) {
-        throw "Transcriber stopped with exit code $LASTEXITCODE."
-    }
 }
 catch {
     Write-Host ("ERROR: " + $_.Exception.Message) -ForegroundColor Red
@@ -121,4 +116,11 @@ catch {
 }
 finally {
     Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
+}
+
+# Keep the long-running worker outside setup.log so the installation transcript
+# remains bounded and useful for diagnostics.
+& $PythonExe scripts\bootstrap_runtime.py --uv $UvExe --profile windows-auto --run-only
+if ($LASTEXITCODE -ne 0) {
+    throw "Transcriber stopped with exit code $LASTEXITCODE."
 }

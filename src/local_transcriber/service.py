@@ -8,6 +8,7 @@ import os
 import re
 import tempfile
 import time
+import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,8 @@ from .engine import AsrEngine, create_engine
 from .errors import InputValidationError, OutputValidationError
 from .markdown_output import render_transcript_markdown
 from .postprocessing import postprocess_segments
+
+LOGGER = logging.getLogger("local_transcriber.service")
 
 SCHEMA_VERSION = "1.1"
 CALL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -33,6 +36,7 @@ class TranscriptionRequest:
     decoder: str = "beam_search"
     engine_name: str = "whisper"
     whisper_cli_path: Path | None = None
+    vad_model_path: Path | None = None
     initial_prompt: str | None = None
     txt_output_path: Path | None = None
     markdown_output_path: Path | None = None
@@ -97,7 +101,8 @@ def transcribe_file(request: TranscriptionRequest, *, engine: AsrEngine | None =
 
     created_at = utc_now()
     started = time.perf_counter()
-    call_id = request.input_path.stem[:128] or "unknown"
+    candidate_call_id = request.input_path.stem[:128]
+    call_id = candidate_call_id if CALL_ID_PATTERN.fullmatch(candidate_call_id) else "unknown"
 
     try:
         call_id = validate_request(request)
@@ -107,16 +112,19 @@ def transcribe_file(request: TranscriptionRequest, *, engine: AsrEngine | None =
         duration_seconds = float(engine_result.duration_seconds)
         if not math.isfinite(duration_seconds) or duration_seconds <= 0:
             raise InputValidationError("Decoded audio duration must be greater than zero")
-        asr_segments = [asdict(segment) for segment in engine_result.segments]
+        asr_segments = _validated_segments(engine_result.segments, duration_seconds)
         postprocessed = postprocess_segments(asr_segments)
         model = asdict(selected_engine.model_info)
+        published_duration = round(duration_seconds, 3)
+        if published_duration <= 0:
+            raise InputValidationError("Decoded audio duration is below the 1 ms contract precision")
         result: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "call_id": call_id,
             "status": "completed",
             "source_audio": request.input_path.name,
             "language": "ru",
-            "duration_seconds": round(duration_seconds, 3),
+            "duration_seconds": published_duration,
             "processing_seconds": round(processing_seconds, 3),
             "real_time_factor": round(processing_seconds / duration_seconds, 4),
             "model": model,
@@ -134,7 +142,16 @@ def transcribe_file(request: TranscriptionRequest, *, engine: AsrEngine | None =
                 postprocessed.text + ("\n" if postprocessed.text else ""),
             )
         if request.markdown_output_path is not None:
-            _atomic_write_text(request.markdown_output_path, render_transcript_markdown(result))
+            _atomic_write_text(
+                request.markdown_output_path,
+                render_transcript_markdown(
+                    result,
+                    audio_href=_markdown_audio_href(
+                        request.input_path,
+                        request.markdown_output_path,
+                    ),
+                ),
+            )
         _atomic_write_json(request.output_path, result)
         return result
     except Exception as exc:
@@ -157,7 +174,7 @@ def transcribe_file(request: TranscriptionRequest, *, engine: AsrEngine | None =
             "completed_at": utc_now(),
             "error": {
                 "type": type(exc).__name__,
-                "message": str(exc),
+                "message": _safe_error_message(str(exc)),
             },
         }
         _write_failure_if_safe(request, result)
@@ -171,6 +188,7 @@ def _create_engine(request: TranscriptionRequest) -> AsrEngine:
         decoder=request.decoder,
         scratch_dir=request.output_path.parent / ".tmp",
         whisper_cli_path=request.whisper_cli_path,
+        vad_model_path=request.vad_model_path,
         initial_prompt=request.initial_prompt,
         verify_model_hashes=request.verify_model_hashes,
     )
@@ -179,6 +197,18 @@ def _create_engine(request: TranscriptionRequest) -> AsrEngine:
 def _write_failure_if_safe(request: TranscriptionRequest, result: dict[str, Any]) -> None:
     output = request.output_path
     if output.suffix.lower() != ".json":
+        return
+    call_id = result.get("call_id")
+    if (
+        not isinstance(call_id, str)
+        or not CALL_ID_PATTERN.fullmatch(call_id)
+        or call_id == "unknown"
+        or request.input_path.stem != call_id
+        or request.input_path.suffix.lower() not in SUPPORTED_EXTENSIONS
+        or output.stem != call_id
+    ):
+        # The returned in-memory error remains available to the CLI, but no
+        # non-canonical or schema-invalid result is published on disk.
         return
     if output.exists():
         # A failed explicit reprocessing must not destroy an older successful or
@@ -200,8 +230,61 @@ def _is_matching_failed_output(path: Path, call_id: str) -> bool:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False) + "\n"
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=False,
+        allow_nan=False,
+    ) + "\n"
     _atomic_write_text(path, serialized)
+
+
+def _validated_segments(segments: Any, duration_seconds: float) -> list[dict[str, Any]]:
+    """Validate engine-neutral timestamps and clip only a harmless end overhang."""
+
+    validated: list[dict[str, Any]] = []
+    previous_start = 0.0
+    for segment in segments:
+        start = float(segment.start)
+        end = float(segment.end)
+        if not math.isfinite(start) or not math.isfinite(end):
+            raise OutputValidationError("ASR returned a non-finite segment timestamp")
+        if start < 0 or end < start:
+            raise OutputValidationError("ASR returned an invalid segment timestamp range")
+        if start < previous_start:
+            raise OutputValidationError("ASR returned non-monotonic segment timestamps")
+        if start > duration_seconds:
+            raise OutputValidationError("ASR segment starts after the source audio ends")
+        if end > duration_seconds:
+            LOGGER.warning(
+                "segment_end_clipped start=%.3f end=%.3f duration=%.3f",
+                start,
+                end,
+                duration_seconds,
+            )
+            end = duration_seconds
+        validated.append(
+            {
+                "start": round(start, 3),
+                "end": round(end, 3),
+                "text": str(segment.text),
+            }
+        )
+        previous_start = start
+    return validated
+
+
+def _safe_error_message(message: str, limit: int = 500) -> str:
+    return " ".join(message.split())[:limit] or "Transcription failed"
+
+
+def _markdown_audio_href(input_path: Path, markdown_path: Path) -> str:
+    try:
+        relative = os.path.relpath(input_path.resolve(strict=True), markdown_path.parent.resolve())
+    except ValueError:
+        return input_path.resolve(strict=True).as_uri()
+    return relative.replace(os.sep, "/")
 
 
 def _atomic_write_text(path: Path, text: str) -> None:

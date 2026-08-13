@@ -21,6 +21,9 @@ from .errors import (
 from .model_manifest import ModelManifest
 from .network import deny_python_network
 
+LOGGER = logging.getLogger("local_transcriber.engine")
+MAX_AUDIO_DURATION_SECONDS = 4 * 60 * 60
+
 
 @dataclass(frozen=True)
 class Segment:
@@ -49,6 +52,11 @@ class EngineModelInfo:
     source_code_revision: str
     decoder: str
     local_path: str
+    vad_name: str | None = None
+    vad_version: str | None = None
+    vad_source_revision: str | None = None
+    vad_sha256: str | None = None
+    vad_threshold: float | None = None
 
 
 class AsrEngine(Protocol):
@@ -91,7 +99,7 @@ class ToneEngine:
             source_revision=self._manifest.source_revision,
             source_code_revision=self._manifest.source_code_revision,
             decoder=self._decoder_name,
-            local_path=str(self._model_dir),
+            local_path=self._model_dir.name,
         )
 
     def _load(self) -> None:
@@ -125,6 +133,12 @@ class ToneEngine:
         assert callable(self._read_audio)
         with deny_python_network():
             try:
+                if input_path.suffix.lower() != ".aac":
+                    declared_duration = _audio_duration(input_path.resolve(strict=True))
+                    if declared_duration > MAX_AUDIO_DURATION_SECONDS:
+                        raise AudioDecodeError(
+                            f"Audio duration exceeds the {MAX_AUDIO_DURATION_SECONDS // 3600}-hour limit"
+                        )
                 audio = self._read_audio(input_path)
             except (AudioDecodeError, DependencyUnavailableError):
                 raise
@@ -133,7 +147,13 @@ class ToneEngine:
             try:
                 sample_count = len(audio)
                 duration_seconds = sample_count / 8000.0
+                if duration_seconds > MAX_AUDIO_DURATION_SECONDS:
+                    raise AudioDecodeError(
+                        f"Audio duration exceeds the {MAX_AUDIO_DURATION_SECONDS // 3600}-hour limit"
+                    )
                 phrases = self._pipeline.forward_offline(audio)  # type: ignore[attr-defined]
+            except AudioDecodeError:
+                raise
             except Exception as exc:
                 raise InferenceError(f"T-one inference failed: {exc}") from exc
 
@@ -161,6 +181,7 @@ class WhisperCppEngine:
         model_dir: Path,
         *,
         cli_path: Path,
+        vad_model_path: Path,
         scratch_dir: Path,
         decoder: str = "beam_search",
         initial_prompt: str | None = None,
@@ -175,6 +196,16 @@ class WhisperCppEngine:
                 f"Local whisper.cpp CLI is missing: {self._cli_path}. "
                 "Run scripts/prepare_whisper_cpp.py in the staging environment."
             )
+        self._vad_model_path = vad_model_path.resolve(strict=False)
+        self._vad_manifest = ModelManifest.load(
+            self._vad_model_path.parent,
+            expected_name="Silero VAD",
+        )
+        self._vad_model_path = self._vad_manifest.validate_artifact(
+            self._vad_model_path.parent,
+            self._vad_model_path.name,
+            verify_hash=True,
+        )
         self._scratch_dir = scratch_dir.resolve(strict=False)
         if self._scratch_dir.exists() and (self._scratch_dir.is_symlink() or not self._scratch_dir.is_dir()):
             raise ModelValidationError(f"Whisper scratch path must be a regular directory: {self._scratch_dir}")
@@ -196,7 +227,12 @@ class WhisperCppEngine:
             source_revision=self._manifest.source_revision,
             source_code_revision=self._manifest.source_code_revision,
             decoder=self._decoder_name,
-            local_path=str(self._model_dir),
+            local_path=self._model_dir.name,
+            vad_name=self._vad_manifest.name,
+            vad_version=self._vad_manifest.version,
+            vad_source_revision=self._vad_manifest.source_revision,
+            vad_sha256=self._vad_manifest.artifacts[self._vad_model_path.name].sha256,
+            vad_threshold=0.5,
         )
 
     def transcribe(self, input_path: Path) -> EngineResult:
@@ -206,6 +242,10 @@ class WhisperCppEngine:
                 input_path,
                 Path(temporary_dir),
             )
+            if duration_seconds > MAX_AUDIO_DURATION_SECONDS:
+                raise AudioDecodeError(
+                    f"Audio duration exceeds the {MAX_AUDIO_DURATION_SECONDS // 3600}-hour limit"
+                )
             output_prefix = Path(temporary_dir) / "result"
             command = [
                 str(self._cli_path),
@@ -215,6 +255,11 @@ class WhisperCppEngine:
                 str(whisper_input),
                 "--language",
                 "ru",
+                "--vad",
+                "--vad-model",
+                str(self._vad_model_path),
+                "--vad-threshold",
+                "0.50",
                 "--threads",
                 str(min(8, os.cpu_count() or 4)),
                 "--beam-size",
@@ -243,7 +288,12 @@ class WhisperCppEngine:
                         encoding="utf-8",
                         errors="replace",
                         check=False,
+                        timeout=max(300.0, duration_seconds * 5.0),
                     )
+                except subprocess.TimeoutExpired as exc:
+                    raise TimeoutError(
+                        "Local whisper.cpp inference exceeded its duration-based timeout"
+                    ) from exc
                 except OSError as exc:
                     raise DependencyUnavailableError(f"Cannot start local whisper.cpp CLI: {exc}") from exc
             if completed.returncode != 0:
@@ -269,6 +319,7 @@ def create_engine(
     decoder: str,
     scratch_dir: Path,
     whisper_cli_path: Path | None = None,
+    vad_model_path: Path | None = None,
     initial_prompt: str | None = None,
     verify_model_hashes: bool = False,
 ) -> AsrEngine:
@@ -281,9 +332,12 @@ def create_engine(
     if engine_name == "whisper":
         if whisper_cli_path is None:
             raise ModelValidationError("whisper_cli_path is required for the whisper engine")
+        if vad_model_path is None:
+            raise ModelValidationError("vad_model_path is required for the whisper engine")
         return WhisperCppEngine(
             model_dir,
             cli_path=whisper_cli_path,
+            vad_model_path=vad_model_path,
             scratch_dir=scratch_dir,
             decoder=decoder,
             initial_prompt=initial_prompt,
@@ -329,7 +383,9 @@ def _transcode_aac_to_wav(input_path: Path, output_path: Path) -> float:
         ) from exc
 
     sample_rate = 16000
+    max_samples = MAX_AUDIO_DURATION_SECONDS * sample_rate
     sample_count = 0
+    skipped_packets = 0
     try:
         with av.open(str(input_path), mode="r", format="aac") as container:
             if not container.streams.audio:
@@ -344,23 +400,39 @@ def _transcode_aac_to_wav(input_path: Path, output_path: Path) -> float:
                     try:
                         frames = packet.decode()
                     except av.error.InvalidDataError:
+                        skipped_packets += 1
                         continue
                     for frame in frames:
                         for converted in resampler.resample(frame):
+                            if sample_count + converted.samples > max_samples:
+                                raise AudioDecodeError(
+                                    f"Audio duration exceeds the {MAX_AUDIO_DURATION_SECONDS // 3600}-hour limit"
+                                )
                             frame_bytes = bytes(converted.planes[0])[: converted.samples * 2]
                             destination.writeframesraw(frame_bytes)
                             sample_count += converted.samples
                 for converted in resampler.resample(None):
+                    if sample_count + converted.samples > max_samples:
+                        raise AudioDecodeError(
+                            f"Audio duration exceeds the {MAX_AUDIO_DURATION_SECONDS // 3600}-hour limit"
+                        )
                     frame_bytes = bytes(converted.planes[0])[: converted.samples * 2]
                     destination.writeframesraw(frame_bytes)
                     sample_count += converted.samples
     except AudioDecodeError:
+        output_path.unlink(missing_ok=True)
         raise
     except Exception as exc:
         raise AudioDecodeError(f"Cannot decode local AAC source: {exc}") from exc
     if sample_count <= 0:
         output_path.unlink(missing_ok=True)
         raise AudioDecodeError("AAC source contains no decodable audio frames")
+    if skipped_packets:
+        LOGGER.warning(
+            "aac_packets_skipped file=%s packet_count=%d",
+            input_path.name,
+            skipped_packets,
+        )
     return sample_count / sample_rate
 
 

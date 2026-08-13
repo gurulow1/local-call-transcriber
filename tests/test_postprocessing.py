@@ -26,10 +26,10 @@ class PostprocessingTests(unittest.TestCase):
                 glossary_path=glossary,
             )
 
-            self.assertEqual(result.text, "Первая фраза. Вторая фраза!")
+            self.assertEqual(result.text, "Первая фраза вторая фраза!")
             self.assertEqual(result.raw_text, "первая   фраза вторая фраза!")
             self.assertEqual(result.segments[0]["asr_text"], "первая   фраза")
-            self.assertEqual(result.segments[0]["text"], "Первая фраза.")
+            self.assertEqual(result.segments[0]["text"], "Первая фраза")
             self.assertEqual(result.metadata["term_replacements"], 0)
 
     def test_applies_terms_before_phrases_and_preserves_brand_casing(self) -> None:
@@ -62,6 +62,54 @@ class PostprocessingTests(unittest.TestCase):
             self.assertEqual(result.text, "Доступен на платформах cTrader и MetaTrader 5.")
             self.assertEqual(result.metadata["term_replacements"], 2)
             self.assertEqual(result.metadata["phrase_replacements"], 1)
+
+    def test_segment_boundaries_preserve_punctuation_and_sentence_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            glossary = self._write_glossary(Path(temporary_dir), terms=[], phrases=[])
+
+            result = postprocess_segments(
+                [
+                    {"start": 0.0, "end": 1.0, "text": "начало фразы,"},
+                    {"start": 1.0, "end": 2.0, "text": "продолжение фразы."},
+                    {"start": 2.0, "end": 3.0, "text": "новое предложение:"},
+                    {"start": 3.0, "end": 4.0, "text": "пояснение."},
+                ],
+                glossary_path=glossary,
+            )
+
+            self.assertEqual(
+                [segment["text"] for segment in result.segments],
+                [
+                    "Начало фразы,",
+                    "продолжение фразы.",
+                    "Новое предложение:",
+                    "пояснение.",
+                ],
+            )
+            self.assertEqual(
+                result.text,
+                "Начало фразы, продолжение фразы. Новое предложение: пояснение.",
+            )
+            self.assertNotIn(",.", result.text)
+            self.assertNotIn(":.", result.text)
+
+    def test_terminal_non_sentence_punctuation_becomes_a_sentence_end(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            glossary = self._write_glossary(Path(temporary_dir), terms=[], phrases=[])
+
+            for raw_text, expected in (
+                ("фраза,", "Фраза."),
+                ("фраза:", "Фраза."),
+                ("фраза;", "Фраза."),
+                ("«фраза»", "«Фраза»."),
+                ("фраза)", "Фраза)."),
+            ):
+                with self.subTest(raw_text=raw_text):
+                    result = postprocess_segments(
+                        [{"start": 0.0, "end": 1.0, "text": raw_text}],
+                        glossary_path=glossary,
+                    )
+                    self.assertEqual(result.text, expected)
 
     def test_longer_rule_wins_and_reprocessing_uses_original_asr_text(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:

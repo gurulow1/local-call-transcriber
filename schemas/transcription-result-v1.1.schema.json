@@ -31,7 +31,7 @@
     "status": {"enum": ["completed", "failed"]},
     "source_audio": {
       "type": "string",
-      "pattern": "^[^/\\\\]+\\.(wav|mp3|flac|ogg|aac)$"
+      "pattern": "^[^/\\\\]+\\.([Ww][Aa][Vv]|[Mm][Pp]3|[Ff][Ll][Aa][Cc]|[Oo][Gg][Gg]|[Aa][Aa][Cc])$"
     },
     "language": {"const": "ru"},
     "duration_seconds": {"type": "number", "minimum": 0},
@@ -57,7 +57,19 @@
             "source_revision": {"type": "string", "minLength": 1},
             "source_code_revision": {"type": "string", "minLength": 1},
             "decoder": {"enum": ["greedy", "beam_search"]},
-            "local_path": {"type": "string", "minLength": 1}
+            "local_path": {"type": "string", "minLength": 1},
+            "vad_name": {"type": ["string", "null"], "minLength": 1},
+            "vad_version": {"type": ["string", "null"], "minLength": 1},
+            "vad_source_revision": {"type": ["string", "null"], "minLength": 1},
+            "vad_sha256": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "vad_threshold": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1
+            }
           }
         }
       ]
@@ -91,7 +103,9 @@
             "phrase_replacements"
           ],
           "properties": {
-            "method": {"const": "deterministic_glossary_v1"},
+            "method": {
+              "enum": ["deterministic_glossary_v1", "deterministic_glossary_v2"]
+            },
             "glossary_version": {"type": "string", "minLength": 1},
             "term_replacements": {"type": "integer", "minimum": 0},
             "phrase_replacements": {"type": "integer", "minimum": 0}

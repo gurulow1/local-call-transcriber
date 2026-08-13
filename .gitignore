@@ -6,6 +6,7 @@ models/*
 !models/README.md
 !models/manifest.example.json
 !models/whisper-large-v3.manifest.example.json
+!models/whisper-vad.manifest.example.json
 data/input/*
 !data/input/.gitkeep
 data/output/*
@@ -33,3 +34,4 @@ __pycache__/
 
 # Local research checkout
 third_party/
+/dist/

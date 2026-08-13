@@ -12,6 +12,7 @@ from .errors import AudioDecodeError, DependencyUnavailableError
 
 LOGGER = logging.getLogger("local_transcriber.audio")
 AudioReader = Callable[[Path | str], np.ndarray]
+MAX_AUDIO_DURATION_SECONDS = 4 * 60 * 60
 
 
 def read_local_audio(path_to_file: Path | str, *, fallback: AudioReader) -> np.ndarray:
@@ -33,6 +34,8 @@ def _read_aac(path: Path) -> np.ndarray:
         ) from exc
 
     chunks: list[np.ndarray] = []
+    sample_count = 0
+    max_samples = MAX_AUDIO_DURATION_SECONDS * 8000
     skipped_packets = 0
     resolved_path = path.resolve(strict=True)
 
@@ -51,10 +54,22 @@ def _read_aac(path: Path) -> np.ndarray:
                     continue
                 for frame in frames:
                     for converted in resampler.resample(frame):
-                        chunks.append(converted.to_ndarray().reshape(-1))
+                        chunk = converted.to_ndarray().reshape(-1)
+                        if sample_count + len(chunk) > max_samples:
+                            raise AudioDecodeError(
+                                f"Audio duration exceeds the {MAX_AUDIO_DURATION_SECONDS // 3600}-hour limit"
+                            )
+                        chunks.append(chunk)
+                        sample_count += len(chunk)
 
             for converted in resampler.resample(None):
-                chunks.append(converted.to_ndarray().reshape(-1))
+                chunk = converted.to_ndarray().reshape(-1)
+                if sample_count + len(chunk) > max_samples:
+                    raise AudioDecodeError(
+                        f"Audio duration exceeds the {MAX_AUDIO_DURATION_SECONDS // 3600}-hour limit"
+                    )
+                chunks.append(chunk)
+                sample_count += len(chunk)
     except AudioDecodeError:
         raise
     except Exception as exc:

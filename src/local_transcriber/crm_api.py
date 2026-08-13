@@ -6,7 +6,9 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -21,6 +23,7 @@ from .service import CALL_ID_PATTERN, SUPPORTED_EXTENSIONS
 LOGGER = logging.getLogger("local_transcriber.crm_api")
 API_VERSION = "1.0"
 DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+UPLOAD_RESERVATION_TTL_SECONDS = 15 * 60
 CONTENT_TYPES = {
     ".wav": {"audio/wav", "audio/x-wav", "application/octet-stream"},
     ".mp3": {"audio/mpeg", "audio/mp3", "application/octet-stream"},
@@ -171,7 +174,14 @@ class CrmApiApplication:
             filename = f"{call_id}{extension}"
             destination = self.input_dir / filename
             self._ensure_new_call(call_id)
-            digest = self._publish_upload(destination, body, length)
+            self._reserve_call_id(call_id)
+            try:
+                digest = self._publish_upload(destination, body, length)
+            finally:
+                try:
+                    self._release_call_id_reservation(call_id)
+                except OSError:
+                    LOGGER.exception("api_reservation_release_error")
             status_url = f"/v1/jobs/{call_id}"
             return _json_response(
                 HTTPStatus.ACCEPTED,
@@ -285,6 +295,111 @@ class CrmApiApplication:
             raise ApiProblem(HTTPStatus.CONFLICT, "call_already_exists", "call_id already exists")
         if call_dir.is_dir() and any(call_dir.iterdir()):
             raise ApiProblem(HTTPStatus.CONFLICT, "call_already_exists", "call_id already exists")
+
+    def _reserve_call_id(self, call_id: str, *, now: float | None = None) -> None:
+        """Atomically reserve one immutable call identity across concurrent uploads."""
+
+        reserved_at = time.time() if now is None else now
+        if self.database_path.is_symlink():
+            raise ApiProblem(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                "unsafe_storage",
+                "Configured database must not be a symlink",
+            )
+        connection: sqlite3.Connection | None = None
+        try:
+            self.database_path.parent.mkdir(parents=True, exist_ok=True)
+            connection = sqlite3.connect(
+                self.database_path,
+                timeout=30,
+                isolation_level=None,
+            )
+            connection.execute("PRAGMA busy_timeout=30000")
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS api_upload_reservations (
+                        call_id TEXT PRIMARY KEY,
+                        reserved_at REAL NOT NULL
+                    )
+                    """
+                )
+                columns = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(api_upload_reservations)")
+                }
+                if "reserved_at" not in columns:
+                    connection.execute(
+                        "ALTER TABLE api_upload_reservations "
+                        "ADD COLUMN reserved_at REAL NOT NULL DEFAULT 0"
+                    )
+                connection.execute(
+                    "DELETE FROM api_upload_reservations WHERE reserved_at <= ?",
+                    (reserved_at - UPLOAD_RESERVATION_TTL_SECONDS,),
+                )
+                # The first check happens before opening SQLite. Repeat it while
+                # holding the reservation write lock so a just-finished upload
+                # cannot slip through after releasing its short-lived row.
+                self._ensure_new_call(call_id)
+                jobs_exist = connection.execute(
+                    """
+                    SELECT 1 FROM sqlite_master
+                    WHERE type = 'table' AND name = 'jobs'
+                    """
+                ).fetchone()
+                queued = None
+                if jobs_exist is not None:
+                    queued = connection.execute(
+                        "SELECT 1 FROM jobs WHERE call_id = ?",
+                        (call_id,),
+                    ).fetchone()
+                reserved = connection.execute(
+                    "SELECT 1 FROM api_upload_reservations WHERE call_id = ?",
+                    (call_id,),
+                ).fetchone()
+                if queued is not None or reserved is not None:
+                    raise ApiProblem(
+                        HTTPStatus.CONFLICT,
+                        "call_already_exists",
+                        "call_id already exists",
+                    )
+                connection.execute(
+                    "INSERT INTO api_upload_reservations(call_id, reserved_at) VALUES (?, ?)",
+                    (call_id, reserved_at),
+                )
+                connection.execute("COMMIT")
+            except BaseException:
+                if connection.in_transaction:
+                    connection.execute("ROLLBACK")
+                raise
+        except sqlite3.Error as exc:
+            raise OSError("Call reservation storage is unavailable") from exc
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def _release_call_id_reservation(self, call_id: str) -> None:
+        connection: sqlite3.Connection | None = None
+        try:
+            if self.database_path.is_symlink():
+                raise OSError("Call reservation storage is unsafe")
+            connection = sqlite3.connect(
+                self.database_path,
+                timeout=30,
+                isolation_level=None,
+            )
+            connection.execute("PRAGMA busy_timeout=30000")
+            connection.execute(
+                "DELETE FROM api_upload_reservations WHERE call_id = ?",
+                (call_id,),
+            )
+        except sqlite3.Error as exc:
+            raise OSError("Call reservation storage is unavailable") from exc
+        finally:
+            if connection is not None:
+                connection.close()
 
     def _publish_upload(self, destination: Path, body: BinaryIO, length: int) -> str:
         self.input_dir.mkdir(parents=True, exist_ok=True)
@@ -459,18 +574,44 @@ class CrmApiRequestHandler(BaseHTTPRequestHandler):
         self.connection.settimeout(60.0)
 
     def do_GET(self) -> None:
+        if not self._host_is_valid():
+            self._send_invalid_host()
+            return
         self._send(self.application.handle_get(self.path))
 
     def do_PUT(self) -> None:
+        if not self._host_is_valid():
+            self._send_invalid_host()
+            return
         self._send(self.application.handle_put(self.path, self.headers, self.rfile))
 
     def do_POST(self) -> None:
+        if not self._host_is_valid():
+            self._send_invalid_host()
+            return
         self._send(
             _problem_response(
                 ApiProblem(
                     HTTPStatus.METHOD_NOT_ALLOWED,
                     "method_not_allowed",
                     "Use PUT for uploads and GET for status or result",
+                )
+            )
+        )
+
+    def _host_is_valid(self) -> bool:
+        values = self.headers.get_all("Host") or []
+        port = self.server.server_address[1]
+        expected = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        return len(values) == 1 and values[0].strip().lower() in expected
+
+    def _send_invalid_host(self) -> None:
+        self._send(
+            _problem_response(
+                ApiProblem(
+                    HTTPStatus.BAD_REQUEST,
+                    "invalid_host",
+                    "Host must identify this loopback server and its actual port",
                 )
             )
         )

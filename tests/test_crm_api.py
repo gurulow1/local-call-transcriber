@@ -4,18 +4,25 @@ import hashlib
 import http.client
 import io
 import json
+import re
+import sqlite3
 import sys
 import tempfile
 import threading
 import unittest
 from http import HTTPStatus
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from local_transcriber.api_cli import build_parser
-from local_transcriber.crm_api import CrmApiApplication, CrmApiServer
+from local_transcriber.crm_api import (
+    UPLOAD_RESERVATION_TTL_SECONDS,
+    CrmApiApplication,
+    CrmApiServer,
+)
 from local_transcriber.engine import EngineModelInfo, EngineResult, Segment
 from local_transcriber.queue import QueueStore
 from local_transcriber.worker import FolderWorker, WorkerConfig
@@ -63,6 +70,11 @@ def completed_result(call_id: str, extension: str = ".wav") -> dict[str, object]
             "source_code_revision": "test-code",
             "decoder": "greedy",
             "local_path": "models/test",
+            "vad_name": None,
+            "vad_version": None,
+            "vad_source_revision": None,
+            "vad_sha256": None,
+            "vad_threshold": None,
         },
         "text": "Синтетический тест.",
         "raw_text": "синтетический тест",
@@ -75,7 +87,7 @@ def completed_result(call_id: str, extension: str = ".wav") -> dict[str, object]
             }
         ],
         "postprocessing": {
-            "method": "deterministic_glossary_v1",
+            "method": "deterministic_glossary_v2",
             "glossary_version": "1",
             "term_replacements": 0,
             "phrase_replacements": 0,
@@ -113,6 +125,14 @@ class CrmApiApplicationTests(unittest.TestCase):
             self.assertEqual(payload["sha256"], hashlib.sha256(audio).hexdigest())
             self.assertEqual((root / "input" / "demo-001.aac").read_bytes(), audio)
             self.assertEqual(list((root / "input").glob("*.part")), [])
+            connection = sqlite3.connect(root / "queue.sqlite3")
+            try:
+                reservation_count = connection.execute(
+                    "SELECT COUNT(*) FROM api_upload_reservations"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertEqual(reservation_count, 0)
 
             status_response = application.handle_get("/v1/jobs/demo-001")
             status_payload = decode(status_response.body)
@@ -156,6 +176,105 @@ class CrmApiApplicationTests(unittest.TestCase):
             )
             self.assertEqual(different_extension.status, HTTPStatus.CONFLICT)
             self.assertFalse((root / "input" / "demo-001.aac").exists())
+
+    def test_concurrent_different_extensions_reserve_one_call_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            application = self.make_application(root)
+            barrier = threading.Barrier(2)
+            original_check = application._ensure_new_call
+            responses = []
+            errors: list[BaseException] = []
+
+            def synchronized_check(call_id: str) -> None:
+                original_check(call_id)
+                if not getattr(thread_state, "initial_check_done", False):
+                    thread_state.initial_check_done = True
+                    barrier.wait(timeout=5)
+
+            def upload(extension: str, content_type: str, body: bytes) -> None:
+                try:
+                    responses.append(
+                        application.handle_put(
+                            f"/v1/jobs/race/audio{extension}",
+                            {
+                                "Content-Length": str(len(body)),
+                                "Content-Type": content_type,
+                            },
+                            io.BytesIO(body),
+                        )
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            thread_state = threading.local()
+            with patch.object(application, "_ensure_new_call", side_effect=synchronized_check):
+                threads = [
+                    threading.Thread(target=upload, args=(".wav", "audio/wav", b"wav")),
+                    threading.Thread(target=upload, args=(".aac", "audio/aac", b"aac")),
+                ]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=10)
+
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertEqual(errors, [])
+            self.assertEqual(
+                sorted(response.status for response in responses),
+                [HTTPStatus.ACCEPTED, HTTPStatus.CONFLICT],
+            )
+            published = list((root / "input").glob("race.*"))
+            self.assertEqual(len(published), 1)
+
+    def test_incomplete_upload_releases_call_id_reservation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            application = self.make_application(root)
+            incomplete = application.handle_put(
+                "/v1/jobs/retry/audio.wav",
+                {"Content-Length": "4", "Content-Type": "audio/wav"},
+                io.BytesIO(b"12"),
+            )
+            retry = application.handle_put(
+                "/v1/jobs/retry/audio.wav",
+                {"Content-Length": "2", "Content-Type": "audio/wav"},
+                io.BytesIO(b"ok"),
+            )
+
+            self.assertEqual(incomplete.status, HTTPStatus.BAD_REQUEST)
+            self.assertEqual(retry.status, HTTPStatus.ACCEPTED)
+            self.assertEqual((root / "input" / "retry.wav").read_bytes(), b"ok")
+
+    def test_crashed_upload_reservation_expires_and_legacy_table_is_migrated(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            database = root / "queue.sqlite3"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "CREATE TABLE api_upload_reservations (call_id TEXT PRIMARY KEY)"
+                )
+                connection.execute(
+                    "INSERT INTO api_upload_reservations(call_id) VALUES ('retry')"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            application = self.make_application(root)
+            with patch(
+                "local_transcriber.crm_api.time.time",
+                return_value=UPLOAD_RESERVATION_TTL_SECONDS + 1,
+            ):
+                response = application.handle_put(
+                    "/v1/jobs/retry/audio.wav",
+                    {"Content-Length": "2", "Content-Type": "audio/wav"},
+                    io.BytesIO(b"ok"),
+                )
+
+            self.assertEqual(response.status, HTTPStatus.ACCEPTED)
+            self.assertEqual((root / "input" / "retry.wav").read_bytes(), b"ok")
 
     def test_invalid_or_unsafe_uploads_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -357,6 +476,31 @@ class CrmApiHttpSmokeTests(unittest.TestCase):
                 self.assertEqual(response.status, HTTPStatus.OK)
                 self.assertEqual(payload["status"], "ok")
 
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+                connection.putrequest("GET", "/healthz", skip_host=True)
+                connection.putheader("Host", f"localhost:{server.server_port}")
+                connection.endheaders()
+                localhost_response = connection.getresponse()
+                localhost_response.read()
+                connection.close()
+                self.assertEqual(localhost_response.status, HTTPStatus.OK)
+
+                for invalid_host in (
+                    f"example.invalid:{server.server_port}",
+                    f"127.0.0.1:{server.server_port + 1}",
+                ):
+                    connection = http.client.HTTPConnection(
+                        "127.0.0.1", server.server_port, timeout=5
+                    )
+                    connection.putrequest("GET", "/healthz", skip_host=True)
+                    connection.putheader("Host", invalid_host)
+                    connection.endheaders()
+                    invalid_response = connection.getresponse()
+                    invalid_payload = json.loads(invalid_response.read().decode("utf-8"))
+                    connection.close()
+                    self.assertEqual(invalid_response.status, HTTPStatus.BAD_REQUEST)
+                    self.assertEqual(invalid_payload["error"]["code"], "invalid_host")
+
                 audio = b"synthetic-http-upload"
                 connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
                 connection.request(
@@ -409,6 +553,16 @@ class CrmContractArtifactTests(unittest.TestCase):
             )
         )
         self.assertEqual(set(result_schema["required"]), set(completed))
+        self.assertIsNotNone(
+            re.fullmatch(result_schema["properties"]["source_audio"]["pattern"], "demo.WaV")
+        )
+        model_schema = result_schema["properties"]["model"]["oneOf"][1]
+        self.assertTrue(set(model_schema["required"]).issubset(completed["model"]))
+        self.assertGreater(completed["duration_seconds"], 0)
+        self.assertIn(
+            completed["postprocessing"]["method"],
+            result_schema["properties"]["postprocessing"]["oneOf"][1]["properties"]["method"]["enum"],
+        )
 
 
 if __name__ == "__main__":

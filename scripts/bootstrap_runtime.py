@@ -134,6 +134,8 @@ def _runtime_ready(python: Path, engine: str) -> bool:
         return (
             (PROJECT_ROOT / "models" / "whisper-large-v3" / "ggml-large-v3.bin").is_file()
             and (PROJECT_ROOT / "models" / "whisper-large-v3" / "manifest.json").is_file()
+            and (PROJECT_ROOT / "models" / "whisper-vad" / "ggml-silero-v5.1.2.bin").is_file()
+            and (PROJECT_ROOT / "models" / "whisper-vad" / "manifest.json").is_file()
             and any(runtime.rglob("whisper-cli.exe"))
             and _imports_work(python, ("av", "miniaudio"))
             and _model_verifies(python, engine)
@@ -147,17 +149,24 @@ def _runtime_ready(python: Path, engine: str) -> bool:
 
 
 def _model_verifies(python: Path, engine: str) -> bool:
-    model_dir = PROJECT_ROOT / "models" / ("whisper-large-v3" if engine == "whisper" else "t-one")
-    command = [str(python), str(PROJECT_ROOT / "scripts" / "verify_model.py"), str(model_dir)]
-    if engine == "t-one":
-        command.append("--greedy-only")
-    return subprocess.run(
-        command,
-        cwd=PROJECT_ROOT,
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    ).returncode == 0
+    model_names = ("whisper-large-v3", "whisper-vad") if engine == "whisper" else ("t-one",)
+    for model_name in model_names:
+        command = [
+            str(python),
+            str(PROJECT_ROOT / "scripts" / "verify_model.py"),
+            str(PROJECT_ROOT / "models" / model_name),
+        ]
+        if engine == "t-one":
+            command.append("--greedy-only")
+        if subprocess.run(
+            command,
+            cwd=PROJECT_ROOT,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode != 0:
+            return False
+    return True
 
 
 def _install_packages(uv: Path, python: Path, packages: Sequence[str]) -> None:
@@ -171,6 +180,7 @@ def _prepare_whisper(uv: Path, python: Path) -> None:
     _install_packages(uv, python, CORE_PACKAGES)
     _run((python, "scripts/prepare_whisper_cpp.py", "--allow-network-download"))
     _run((python, "scripts/verify_model.py", "models/whisper-large-v3"))
+    _run((python, "scripts/verify_model.py", "models/whisper-vad"))
 
 
 def _prepare_tone(uv: Path, python: Path) -> None:
@@ -227,17 +237,28 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--uv", required=True, type=Path)
     parser.add_argument("--profile", choices=("windows-auto", "cpu"), required=True)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--prepare-only",
         action="store_true",
         help="Verify or prepare the runtime, then exit before starting the worker",
+    )
+    mode.add_argument(
+        "--run-only",
+        action="store_true",
+        help="Start the worker only when the prepared runtime still verifies",
     )
     args = parser.parse_args()
     uv = args.uv.resolve(strict=True)
     python = Path(sys.executable).resolve(strict=True)
     engine = choose_engine(args.profile)
 
-    _ensure_runtime(uv, python, engine)
+    if args.run_only:
+        if not _runtime_ready(python, engine):
+            raise SystemExit("Local runtime is not ready; run the bootstrap preparation first")
+    else:
+        _ensure_runtime(uv, python, engine)
+
     if args.prepare_only:
         return 0
 

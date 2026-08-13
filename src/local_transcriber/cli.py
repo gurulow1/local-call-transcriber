@@ -20,6 +20,10 @@ def default_whisper_cli_path() -> Path:
     return match or runtime_dir / "Release" / executable
 
 
+def default_vad_model_path() -> Path:
+    return PROJECT_ROOT / "models" / "whisper-vad" / "ggml-silero-v5.1.2.bin"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Transcribe one Russian call locally with pre-provisioned ASR weights",
@@ -42,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=default_whisper_cli_path(),
         help="Pinned local whisper.cpp executable",
+    )
+    parser.add_argument(
+        "--vad-model",
+        type=Path,
+        default=default_vad_model_path(),
+        help="Pinned local Silero VAD model required by the Whisper engine",
     )
     parser.add_argument(
         "--decoder",
@@ -80,6 +90,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         decoder=args.decoder,
         engine_name=args.engine,
         whisper_cli_path=args.whisper_cli,
+        vad_model_path=args.vad_model,
         initial_prompt=args.initial_prompt,
         txt_output_path=args.txt_output,
         markdown_output_path=args.markdown_output,

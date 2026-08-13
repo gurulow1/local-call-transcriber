@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from .engine import AsrEngine, create_engine
-from .errors import TranscriberError
+from .errors import InputValidationError, TranscriberError
 from .queue import QueueConflictError, QueueJob, QueueStore
 from .service import SUPPORTED_EXTENSIONS, TranscriptionRequest, extract_call_id, transcribe_file
 
@@ -31,6 +32,7 @@ class WorkerConfig:
     model_dir: Path
     engine_name: str = "whisper"
     whisper_cli_path: Path | None = None
+    vad_model_path: Path | None = None
     initial_prompt: str | None = None
     decoder: str = "beam_search"
     stable_seconds: float = 5.0
@@ -122,6 +124,7 @@ class FolderWorker:
             decoder=config.decoder,
             scratch_dir=config.calls_dir / ".tmp",
             whisper_cli_path=config.whisper_cli_path,
+            vad_model_path=config.vad_model_path,
             initial_prompt=config.initial_prompt,
         )
         self.worker_id = worker_id or f"{os.getpid()}-{uuid.uuid4().hex[:12]}"
@@ -138,9 +141,26 @@ class FolderWorker:
             if input_path.is_symlink() or not input_path.is_file():
                 continue
             if input_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                if not (
+                    input_path.name.startswith(".crm-upload-")
+                    and input_path.suffix.lower() == ".part"
+                ):
+                    self._record_rejected_source(
+                        input_path,
+                        "UnsupportedAudioExtension",
+                        "Unsupported audio extension; use WAV, MP3, FLAC, OGG or AAC",
+                    )
                 continue
             try:
                 call_id = extract_call_id(input_path)
+            except InputValidationError:
+                self._record_rejected_source(
+                    input_path,
+                    "InvalidCallId",
+                    "Filename does not provide a safe call_id",
+                )
+                continue
+            try:
                 call_dir = self.config.calls_dir / call_id
                 call_dir.mkdir(parents=True, exist_ok=True)
                 output_path = call_dir / f"{call_id}.json"
@@ -275,12 +295,16 @@ class FolderWorker:
 
     def drain(self) -> int:
         processed = 0
-        while self.process_one():
+        while True:
+            retried, failed = self.store.recover_expired(now=time.time())
+            if retried or failed:
+                LOGGER.warning("lease_recovery requeued=%d failed=%d", retried, failed)
+            if not self.process_one():
+                break
             processed += 1
         return processed
 
     def run_one_shot(self) -> int:
-        self.store.recover_expired(now=time.time())
         self.scan()
         if self.config.stable_seconds > 0:
             time.sleep(self.config.stable_seconds)
@@ -288,13 +312,63 @@ class FolderWorker:
         return self.drain()
 
     def run_loop(self) -> None:
-        retried, failed = self.store.recover_expired(now=time.time())
-        if retried or failed:
-            LOGGER.warning("lease_recovery requeued=%d failed=%d", retried, failed)
         while True:
             self.scan()
             self.drain()
             time.sleep(self.config.poll_seconds)
+
+    def _record_rejected_source(
+        self,
+        input_path: Path,
+        error_type: str,
+        message: str,
+    ) -> None:
+        try:
+            self._write_rejected_marker(input_path, error_type, message)
+        except OSError as exc:
+            LOGGER.error("rejected_marker_error error_type=%s", type(exc).__name__)
+
+    def _write_rejected_marker(
+        self,
+        input_path: Path,
+        error_type: str,
+        message: str,
+    ) -> None:
+        if self.config.failed_dir.is_symlink():
+            raise OSError("Failed marker directory must not be a symlink")
+        self.config.failed_dir.mkdir(parents=True, exist_ok=True)
+        token = hashlib.sha256(input_path.name.encode("utf-8")).hexdigest()[:12]
+        final_path = self.config.failed_dir / f"rejected-{token}.json"
+        if final_path.is_symlink() or (final_path.exists() and not final_path.is_file()):
+            raise OSError("Failed marker path is unsafe")
+        payload = {
+            "status": "failed",
+            "filename": input_path.name,
+            "error_type": error_type[:100],
+            "message": " ".join(message.split())[:500],
+        }
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+        if final_path.is_file():
+            try:
+                if final_path.read_text(encoding="utf-8") == serialized:
+                    return
+            except (OSError, UnicodeError):
+                pass
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=self.config.failed_dir,
+            prefix=f".rejected-{token}.",
+            suffix=".tmp",
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as destination:
+                destination.write(serialized)
+                destination.flush()
+                os.fsync(destination.fileno())
+            os.replace(temporary_path, final_path)
+        except Exception:
+            temporary_path.unlink(missing_ok=True)
+            raise
 
     def _write_failed_marker(
         self,

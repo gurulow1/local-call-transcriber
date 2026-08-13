@@ -75,14 +75,27 @@ def postprocess_segments(
     term_replacements = 0
     phrase_replacements = 0
 
+    prepared: list[tuple[Mapping[str, Any], str, str, int, int]] = []
     for segment in segments:
         raw_value = segment.get("asr_text", segment.get("text", ""))
         raw_segment_text = str(raw_value).strip()
         cleaned_text = _normalize_whitespace(raw_segment_text)
         cleaned_text, term_count = _apply_rules(cleaned_text, glossary.terms)
         cleaned_text, phrase_count = _apply_rules(cleaned_text, glossary.phrases)
-        cleaned_text = _capitalize_first_word(cleaned_text)
-        cleaned_text = _ensure_terminal_punctuation(cleaned_text)
+        prepared.append((segment, raw_segment_text, cleaned_text, term_count, phrase_count))
+
+    nonempty_indexes = [index for index, item in enumerate(prepared) if item[2]]
+    last_nonempty_index = nonempty_indexes[-1] if nonempty_indexes else None
+    capitalize_next = True
+
+    for index, (segment, raw_segment_text, cleaned_text, term_count, phrase_count) in enumerate(prepared):
+        if cleaned_text and capitalize_next:
+            cleaned_text = _capitalize_first_word(cleaned_text)
+        had_sentence_end = _ends_sentence(cleaned_text)
+        if index == last_nonempty_index:
+            cleaned_text = _ensure_terminal_punctuation(cleaned_text)
+        if cleaned_text:
+            capitalize_next = had_sentence_end
 
         cleaned_segment = dict(segment)
         cleaned_segment["asr_text"] = raw_segment_text
@@ -101,7 +114,7 @@ def postprocess_segments(
         raw_text=" ".join(raw_parts),
         segments=cleaned_segments,
         metadata={
-            "method": "deterministic_glossary_v1",
+            "method": "deterministic_glossary_v2",
             "glossary_version": glossary.version,
             "term_replacements": term_replacements,
             "phrase_replacements": phrase_replacements,
@@ -163,6 +176,15 @@ def _capitalize_first_word(text: str) -> str:
 
 
 def _ensure_terminal_punctuation(text: str) -> str:
-    if text and text[-1] not in TERMINAL_PUNCTUATION:
-        return f"{text}."
-    return text
+    if not text or _ends_sentence(text):
+        return text
+    if text[-1] in {",", ";", ":"}:
+        return f"{text[:-1]}."
+    return f"{text}."
+
+
+def _ends_sentence(text: str) -> bool:
+    stripped = text.rstrip()
+    while stripped and stripped[-1] in {'"', "'", "»", "”", ")", "]", "}"}:
+        stripped = stripped[:-1].rstrip()
+    return bool(stripped) and stripped[-1] in TERMINAL_PUNCTUATION

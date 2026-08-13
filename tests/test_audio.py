@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -12,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from local_transcriber.audio import read_local_audio
+from local_transcriber.errors import AudioDecodeError
 
 PYAV_AVAILABLE = importlib.util.find_spec("av") is not None
 
@@ -61,6 +63,10 @@ class LocalAudioTests(unittest.TestCase):
             self.assertEqual(result.ndim, 1)
             self.assertGreaterEqual(len(result), 8000)
             self.assertLessEqual(len(result), 8400)
+
+            with patch("local_transcriber.audio.MAX_AUDIO_DURATION_SECONDS", 0):
+                with self.assertRaises(AudioDecodeError):
+                    read_local_audio(source, fallback=lambda _: self.fail("unexpected fallback"))
 
 
 if __name__ == "__main__":

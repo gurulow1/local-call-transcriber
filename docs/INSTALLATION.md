@@ -19,7 +19,7 @@
 
 - скачивает закреплённый `uv 0.11.13` нужной платформы и проверяет SHA-256;
 - создаёт локальное окружение с управляемым Python 3.12 внутри `.poetry-cache`, не меняя возможную разработческую `.venv`;
-- для Windows/NVIDIA скачивает проверенные whisper.cpp/CUDA и Whisper large-v3 (около 3,8 ГБ);
+- для Windows/NVIDIA скачивает проверенные whisper.cpp/CUDA, Whisper large-v3 и обязательную Silero VAD (около 3,8 ГБ суммарно);
 - для CPU-пути скачивает проверенный архив T-one и `model.onnx`;
 - ставит фиксированные прямые runtime-зависимости, включая AAC decoder;
 - проверяет модель по размеру/SHA-256 и выполняет локальные тесты;
@@ -37,9 +37,10 @@
 ```powershell
 .venv\Scripts\python.exe scripts\prepare_whisper_cpp.py --allow-network-download
 .venv\Scripts\python.exe scripts\verify_model.py models\whisper-large-v3
+.venv\Scripts\python.exe scripts\verify_model.py models\whisper-vad
 ```
 
-Скрипт загружает официальный `whisper-cublas-12.4.0-bin-x64.zip` и `ggml-large-v3.bin`, проверяет зафиксированные размер/SHA-256 и публикует локальный manifest. Runtime не скачивает файлы и получает только локальные пути.
+Скрипт загружает официальный `whisper-cublas-12.4.0-bin-x64.zip`, `ggml-large-v3.bin` и `ggml-silero-v5.1.2.bin`, проверяет зафиксированные размер/SHA-256 и публикует локальные manifests. Whisper без проверенной VAD-модели не запускается. Runtime не скачивает файлы и получает только локальные пути.
 
 Для AAC ADTS дополнительно нужен зафиксированный PyAV wheel из `requirements/aac.txt`; процедура загрузки во время staging и офлайн-установки приведена в разделе 1. Whisper декодирует AAC во временный mono PCM WAV 16 кГц внутри каталога результата и удаляет его после обработки.
 
@@ -73,7 +74,7 @@ git clone https://github.com/voicekit-team/T-one.git third_party/T-one
 git -C third_party/T-one checkout 3c5b6c015038173840e62cea99e10cdb1c759116
 ```
 
-Создать Python 3.9+ environment. Проверено на Python 3.12.13:
+Создать Python 3.11+ environment. Проверено на Python 3.11.9 и 3.12.13:
 
 ```bash
 python3.12 -m venv .venv

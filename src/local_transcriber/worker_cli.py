@@ -13,7 +13,7 @@ try:
 except ModuleNotFoundError:  # Windows
     resource = None  # type: ignore[assignment]
 
-from .cli import default_whisper_cli_path
+from .cli import default_vad_model_path, default_whisper_cli_path
 from .worker import FolderWorker, WorkerConfig, configure_logging
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--engine", choices=("whisper", "t-one"), default="whisper")
     parser.add_argument("--model-dir", type=Path)
     parser.add_argument("--whisper-cli", type=Path, default=default_whisper_cli_path())
+    parser.add_argument("--vad-model", type=Path, default=default_vad_model_path())
     parser.add_argument("--initial-prompt", help="Optional domain vocabulary hint")
     parser.add_argument("--log", type=Path, default=PROJECT_ROOT / "logs" / "worker.log")
     parser.add_argument("--decoder", choices=("beam_search", "greedy"), default="beam_search")
@@ -78,6 +79,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         model_dir=model_dir,
         engine_name=args.engine,
         whisper_cli_path=args.whisper_cli,
+        vad_model_path=args.vad_model,
         initial_prompt=args.initial_prompt,
         decoder=args.decoder,
         stable_seconds=args.stable_seconds,

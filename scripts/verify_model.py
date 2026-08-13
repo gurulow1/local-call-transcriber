@@ -25,6 +25,8 @@ def main() -> int:
         filenames = ["model.onnx"] if args.greedy_only else ["model.onnx", "kenlm.bin"]
     elif manifest.name == "Whisper large-v3":
         filenames = ["ggml-large-v3.bin"]
+    elif manifest.name == "Silero VAD":
+        filenames = ["ggml-silero-v5.1.2.bin"]
     else:
         raise SystemExit(f"unsupported model bundle: {manifest.name}")
     for filename in filenames:
