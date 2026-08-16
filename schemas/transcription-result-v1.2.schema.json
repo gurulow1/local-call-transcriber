@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:local-call-transcriber:result:1.2",
+  "title": "Local call transcription result 1.2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "call_id",
+    "status",
+    "source_audio",
+    "language",
+    "duration_seconds",
+    "processing_seconds",
+    "real_time_factor",
+    "model",
+    "text",
+    "raw_text",
+    "segments",
+    "postprocessing",
+    "created_at",
+    "completed_at",
+    "error"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.2"},
+    "call_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+    },
+    "status": {"enum": ["completed", "failed"]},
+    "source_audio": {
+      "type": "string",
+      "pattern": "^[^/\\\\]+\\.([Ww][Aa][Vv]|[Mm][Pp]3|[Ff][Ll][Aa][Cc]|[Oo][Gg][Gg]|[Aa][Aa][Cc])$"
+    },
+    "language": {"const": "ru"},
+    "duration_seconds": {"type": "number", "minimum": 0},
+    "processing_seconds": {"type": "number", "minimum": 0},
+    "real_time_factor": {"type": "number", "minimum": 0},
+    "model": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "version",
+            "source_revision",
+            "source_code_revision",
+            "decoder",
+            "local_path"
+          ],
+          "properties": {
+            "name": {"type": "string", "minLength": 1},
+            "version": {"type": "string", "minLength": 1},
+            "source_revision": {"type": "string", "minLength": 1},
+            "source_code_revision": {"type": "string", "minLength": 1},
+            "decoder": {"enum": ["greedy", "beam_search"]},
+            "local_path": {"type": "string", "minLength": 1},
+            "vad_name": {"type": ["string", "null"], "minLength": 1},
+            "vad_version": {"type": ["string", "null"], "minLength": 1},
+            "vad_source_revision": {"type": ["string", "null"], "minLength": 1},
+            "vad_sha256": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "vad_threshold": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      ]
+    },
+    "text": {"type": "string"},
+    "raw_text": {"type": "string"},
+    "segments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["start", "end", "text", "asr_text"],
+        "properties": {
+          "start": {"type": "number", "minimum": 0},
+          "end": {"type": "number", "minimum": 0},
+          "text": {"type": "string"},
+          "asr_text": {"type": "string"},
+          "speaker": {"enum": ["SPEAKER_00", "SPEAKER_01"]}
+        }
+      }
+    },
+    "postprocessing": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "glossary_version",
+            "term_replacements",
+            "phrase_replacements"
+          ],
+          "properties": {
+            "method": {
+              "enum": ["deterministic_glossary_v1", "deterministic_glossary_v2"]
+            },
+            "glossary_version": {"type": "string", "minLength": 1},
+            "term_replacements": {"type": "integer", "minimum": 0},
+            "phrase_replacements": {"type": "integer", "minimum": 0}
+          }
+        }
+      ]
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "error": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "message"],
+          "properties": {
+            "type": {"type": "string", "minLength": 1},
+            "message": {"type": "string", "maxLength": 500}
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "completed"}}},
+      "then": {
+        "properties": {
+          "duration_seconds": {"exclusiveMinimum": 0},
+          "model": {"type": "object"},
+          "postprocessing": {"type": "object"},
+          "error": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "failed"}}},
+      "then": {
+        "properties": {
+          "error": {"type": "object"}
+        }
+      }
+    }
+  ]
+}

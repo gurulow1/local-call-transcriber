@@ -73,6 +73,11 @@ class ArchiveLauncherTests(unittest.TestCase):
             self.assertEqual(bootstrap.choose_engine("windows-auto"), "t-one")
         self.assertEqual(bootstrap.choose_engine("cpu"), "t-one")
 
+    def test_whisper_bootstrap_installs_self_test_dependencies(self) -> None:
+        bootstrap = _load_bootstrap()
+
+        self.assertIn("numpy==1.26.4", bootstrap.CORE_PACKAGES)
+
     def test_macos_remains_an_additional_self_installing_launcher(self) -> None:
         script = MACOS_LAUNCHER.read_text(encoding="utf-8")
 
@@ -223,6 +228,7 @@ class ArchiveLauncherTests(unittest.TestCase):
         self.assertEqual(whisper.status, "FAIL")
         self.assertEqual(whisper.detail, "missing: av, miniaudio")
 
+    @unittest.skipIf(sys.platform == "win32", "Linux launcher syntax is verified on Linux")
     @unittest.skipUnless(shutil.which("bash"), "bash is unavailable on this platform")
     def test_linux_launcher_has_valid_bash_syntax(self) -> None:
         probe = subprocess.run(["bash", "-c", "exit 0"], check=False, capture_output=True)

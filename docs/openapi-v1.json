@@ -104,7 +104,7 @@
             "description": "Completed transcription",
             "content": {
               "application/json": {
-                "schema": {"$ref": "../schemas/transcription-result-v1.1.schema.json"}
+                "schema": {"$ref": "../schemas/transcription-result-v1.2.schema.json"}
               }
             }
           },

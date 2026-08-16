@@ -29,10 +29,10 @@ TONE_URL = f"https://github.com/voicekit-team/T-one/archive/{TONE_COMMIT}.tar.gz
 CORE_PACKAGES = (
     "av==18.0.0",
     "miniaudio==1.61",
+    "numpy==1.26.4",
 )
 TONE_PACKAGES = CORE_PACKAGES + (
     "huggingface-hub==0.33.0",
-    "numpy==1.26.4",
     "onnxruntime==1.22.0",
     "poetry-core==2.1.1",
     "pyctcdecode==0.5.0",

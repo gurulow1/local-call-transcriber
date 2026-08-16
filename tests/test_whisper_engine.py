@@ -84,12 +84,13 @@ class WhisperCppEngineTests(unittest.TestCase):
 
             with patch(
                 "local_transcriber.engine._transcode_aac_to_wav",
-                return_value=1.25,
+                return_value=(1.25, 2),
             ) as transcode:
-                prepared, duration = _prepare_whisper_input(source, scratch)
+                prepared, duration, stereo = _prepare_whisper_input(source, scratch)
 
             self.assertEqual(prepared, scratch / "input.wav")
             self.assertEqual(duration, 1.25)
+            self.assertTrue(stereo)
             transcode.assert_called_once_with(source.resolve(), prepared)
 
     def test_local_cli_json_is_converted_to_engine_segments(self) -> None:
@@ -122,6 +123,7 @@ class WhisperCppEngineTests(unittest.TestCase):
                 )
                 self.assertIn("БИК, ИНН", arguments)
                 self.assertIn("--vad", arguments)
+                self.assertNotIn("--diarize", arguments)
                 self.assertEqual(arguments[arguments.index("--vad-model") + 1], str(vad_model.resolve()))
                 self.assertEqual(arguments[arguments.index("--vad-threshold") + 1], "0.50")
                 self.assertEqual(_["timeout"], 300.0)
@@ -140,12 +142,95 @@ class WhisperCppEngineTests(unittest.TestCase):
 
             self.assertEqual(result.duration_seconds, 1.0)
             self.assertEqual(result.segments[0].text, "сложный термин")
+            self.assertIsNone(result.segments[0].speaker)
             self.assertEqual((result.segments[0].start, result.segments[0].end), (0.1, 0.9))
             self.assertEqual(engine.model_info.local_path, "model")
             self.assertEqual(engine.model_info.vad_name, "Silero VAD")
             self.assertEqual(engine.model_info.vad_version, "test")
             self.assertEqual(engine.model_info.vad_threshold, 0.5)
             self.assertEqual(len(str(engine.model_info.vad_sha256)), 64)
+
+    def test_stereo_input_enables_channel_diarization_and_labels_segments(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            model_dir, executable, vad_model = self._write_runtime(root)
+            audio = root / "call.wav"
+            audio.write_bytes(b"stereo-placeholder")
+
+            def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+                response_file = Path(str(kwargs["cwd"])) / command[1][1:]
+                arguments = response_file.read_text(encoding="utf-8").splitlines()
+                output_prefix = Path(arguments[arguments.index("--output-file") + 1])
+                Path(f"{output_prefix}.json").write_text(
+                    json.dumps(
+                        {
+                            "transcription": [
+                                {
+                                    "offsets": {"from": 100, "to": 400},
+                                    "text": " первый канал ",
+                                    "speaker": "0",
+                                },
+                                {
+                                    "offsets": {"from": 500, "to": 900},
+                                    "text": " второй канал ",
+                                    "speaker": "1",
+                                },
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                self.assertIn("--diarize", arguments)
+                return subprocess.CompletedProcess(command, 0)
+
+            engine = WhisperCppEngine(
+                model_dir,
+                cli_path=executable,
+                scratch_dir=root / "scratch",
+                vad_model_path=vad_model,
+            )
+            with patch(
+                "local_transcriber.engine._prepare_whisper_input",
+                return_value=(audio.resolve(), 1.0, True),
+            ), patch("local_transcriber.engine.subprocess.run", side_effect=fake_run):
+                result = engine.transcribe(audio)
+
+            self.assertEqual(
+                [segment.speaker for segment in result.segments],
+                ["SPEAKER_00", "SPEAKER_01"],
+            )
+
+    @unittest.skipUnless(importlib.util.find_spec("av") is not None, "optional PyAV is unavailable")
+    def test_stereo_aac_is_preserved_for_channel_diarization(self) -> None:
+        import av
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            source = root / "sample.aac"
+            output = root / "decoded.wav"
+            container = av.open(str(source), mode="w", format="adts")
+            stream = container.add_stream("aac", rate=48000)
+            stream.layout = "stereo"
+            frame = av.AudioFrame.from_ndarray(
+                np.zeros((2, 48000), dtype=np.float32),
+                format="fltp",
+                layout="stereo",
+            )
+            frame.sample_rate = 48000
+            for packet in stream.encode(frame):
+                container.mux(packet)
+            for packet in stream.encode():
+                container.mux(packet)
+            container.close()
+
+            duration, channels = _transcode_aac_to_wav(source, output)
+
+            self.assertGreater(duration, 0)
+            self.assertEqual(channels, 2)
+            with wave.open(str(output), "rb") as decoded:
+                self.assertEqual(decoded.getnchannels(), 2)
+                self.assertEqual(decoded.getframerate(), 16000)
 
     @unittest.skipUnless(importlib.util.find_spec("av") is not None, "optional PyAV is unavailable")
     def test_aac_decode_stops_before_exceeding_duration_limit(self) -> None:
@@ -220,7 +305,7 @@ class WhisperCppEngineTests(unittest.TestCase):
                 with (
                     patch(
                         "local_transcriber.engine._prepare_whisper_input",
-                        return_value=(source.resolve(), duration),
+                        return_value=(source.resolve(), duration, False),
                     ),
                     patch("local_transcriber.engine.subprocess.run", side_effect=fake_timeout),
                 ):

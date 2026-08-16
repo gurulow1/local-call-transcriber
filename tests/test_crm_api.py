@@ -55,7 +55,7 @@ def decode(response_body: bytes) -> dict[str, object]:
 
 def completed_result(call_id: str, extension: str = ".wav") -> dict[str, object]:
     return {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "call_id": call_id,
         "status": "completed",
         "source_audio": f"{call_id}{extension}",
@@ -531,7 +531,7 @@ class CrmContractArtifactTests(unittest.TestCase):
     def test_schemas_openapi_and_examples_are_valid_json(self) -> None:
         paths = [
             PROJECT_ROOT / "schemas" / "crm-job-status-v1.schema.json",
-            PROJECT_ROOT / "schemas" / "transcription-result-v1.1.schema.json",
+            PROJECT_ROOT / "schemas" / "transcription-result-v1.2.schema.json",
             PROJECT_ROOT / "docs" / "openapi-v1.json",
             *(PROJECT_ROOT / "examples" / "crm").glob("*.json"),
         ]

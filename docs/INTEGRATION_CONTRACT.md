@@ -53,6 +53,7 @@ GET /v1/jobs/{call_id}/result
 - `completed` содержит текст и может содержать сегменты;
 - `text` — детерминированно очищенная версия, `raw_text` — неизменная склейка выдачи ASR;
 - каждый сегмент содержит очищенный `text` и исходный `asr_text`; таймкоды при постобработке не меняются;
+- для двухканальной записи Whisper-сегмент дополнительно содержит `speaker`: левый канал — `SPEAKER_00`, правый — `SPEAKER_01`; это метки каналов, а не идентификация личности или роли;
 - `postprocessing` фиксирует метод, версию словаря и число применённых замен; текущий pipeline пишет `deterministic_glossary_v2`, схема продолжает читать legacy `v1`;
 - `failed` содержит `error.type` и безопасное `error.message`, без stack trace и текста звонка;
 - таймкоды — секунды от начала аудио, числа `>= 0`, конец не меньше начала;
@@ -69,7 +70,7 @@ GET /v1/jobs/{call_id}/result
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "1.2",
   "call_id": "1234",
   "status": "completed",
   "source_audio": "1234.wav",
@@ -97,7 +98,8 @@ GET /v1/jobs/{call_id}/result
       "start": 0.0,
       "end": 1.0,
       "text": "Очищенная фраза.",
-      "asr_text": "очищенная фраза"
+      "asr_text": "очищенная фраза",
+      "speaker": "SPEAKER_00"
     }
   ],
   "postprocessing": {

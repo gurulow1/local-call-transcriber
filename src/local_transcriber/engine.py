@@ -32,6 +32,7 @@ class Segment:
     start: float
     end: float
     text: str
+    speaker: str | None = None
 
 
 @dataclass(frozen=True)
@@ -238,7 +239,7 @@ class WhisperCppEngine:
     def transcribe(self, input_path: Path) -> EngineResult:
         beam_size = "5" if self._decoder_name == "beam_search" else "1"
         with tempfile.TemporaryDirectory(dir=self._scratch_dir, prefix="whisper-") as temporary_dir:
-            whisper_input, duration_seconds = _prepare_whisper_input(
+            whisper_input, duration_seconds, stereo = _prepare_whisper_input(
                 input_path,
                 Path(temporary_dir),
             )
@@ -272,6 +273,8 @@ class WhisperCppEngine:
                 str(output_prefix),
                 "--no-prints",
             ]
+            if stereo:
+                command.append("--diarize")
             if self._initial_prompt:
                 command.extend(("--prompt", self._initial_prompt))
             response_file = Path(temporary_dir) / "arguments.rsp"
@@ -346,7 +349,7 @@ def create_engine(
     raise ModelValidationError(f"Unsupported ASR engine: {engine_name!r}")
 
 
-def _audio_duration(input_path: Path) -> float:
+def _audio_properties(input_path: Path) -> tuple[float, int]:
     try:
         import miniaudio
     except ImportError as exc:
@@ -354,25 +357,34 @@ def _audio_duration(input_path: Path) -> float:
             "miniaudio==1.61 is required to inspect local audio without FFmpeg"
         ) from exc
     try:
-        duration = float(miniaudio.get_file_info(str(input_path)).duration)
+        info = miniaudio.get_file_info(str(input_path))
+        duration = float(info.duration)
+        channels = int(info.nchannels)
     except Exception as exc:
         raise AudioDecodeError(f"Cannot inspect source audio: {exc}") from exc
     if duration <= 0:
         raise AudioDecodeError("Decoded audio duration must be greater than zero")
-    return duration
+    if channels <= 0:
+        raise AudioDecodeError("Decoded audio must contain at least one channel")
+    return duration, channels
 
 
-def _prepare_whisper_input(input_path: Path, temporary_dir: Path) -> tuple[Path, float]:
+def _audio_duration(input_path: Path) -> float:
+    return _audio_properties(input_path)[0]
+
+
+def _prepare_whisper_input(input_path: Path, temporary_dir: Path) -> tuple[Path, float, bool]:
     resolved_input = input_path.resolve(strict=True)
     if input_path.suffix.lower() != ".aac":
-        return resolved_input, _audio_duration(resolved_input)
+        duration_seconds, channels = _audio_properties(resolved_input)
+        return resolved_input, duration_seconds, channels == 2
     converted_path = temporary_dir / "input.wav"
-    duration_seconds = _transcode_aac_to_wav(resolved_input, converted_path)
-    return converted_path, duration_seconds
+    duration_seconds, channels = _transcode_aac_to_wav(resolved_input, converted_path)
+    return converted_path, duration_seconds, channels == 2
 
 
-def _transcode_aac_to_wav(input_path: Path, output_path: Path) -> float:
-    """Decode local AAC ADTS to the 16 kHz mono PCM expected by whisper.cpp."""
+def _transcode_aac_to_wav(input_path: Path, output_path: Path) -> tuple[float, int]:
+    """Decode local AAC ADTS to 16 kHz PCM, preserving a stereo call when present."""
 
     try:
         import av
@@ -391,9 +403,11 @@ def _transcode_aac_to_wav(input_path: Path, output_path: Path) -> float:
             if not container.streams.audio:
                 raise AudioDecodeError("AAC source contains no audio stream")
             stream = container.streams.audio[0]
-            resampler = av.AudioResampler(format="s16", layout="mono", rate=sample_rate)
+            output_channels = 2 if len(stream.layout.channels) == 2 else 1
+            output_layout = "stereo" if output_channels == 2 else "mono"
+            resampler = av.AudioResampler(format="s16", layout=output_layout, rate=sample_rate)
             with wave.open(str(output_path), "wb") as destination:
-                destination.setnchannels(1)
+                destination.setnchannels(output_channels)
                 destination.setsampwidth(2)
                 destination.setframerate(sample_rate)
                 for packet in container.demux(stream):
@@ -408,7 +422,9 @@ def _transcode_aac_to_wav(input_path: Path, output_path: Path) -> float:
                                 raise AudioDecodeError(
                                     f"Audio duration exceeds the {MAX_AUDIO_DURATION_SECONDS // 3600}-hour limit"
                                 )
-                            frame_bytes = bytes(converted.planes[0])[: converted.samples * 2]
+                            frame_bytes = bytes(converted.planes[0])[
+                                : converted.samples * output_channels * 2
+                            ]
                             destination.writeframesraw(frame_bytes)
                             sample_count += converted.samples
                 for converted in resampler.resample(None):
@@ -416,7 +432,9 @@ def _transcode_aac_to_wav(input_path: Path, output_path: Path) -> float:
                         raise AudioDecodeError(
                             f"Audio duration exceeds the {MAX_AUDIO_DURATION_SECONDS // 3600}-hour limit"
                         )
-                    frame_bytes = bytes(converted.planes[0])[: converted.samples * 2]
+                    frame_bytes = bytes(converted.planes[0])[
+                        : converted.samples * output_channels * 2
+                    ]
                     destination.writeframesraw(frame_bytes)
                     sample_count += converted.samples
     except AudioDecodeError:
@@ -433,7 +451,7 @@ def _transcode_aac_to_wav(input_path: Path, output_path: Path) -> float:
             input_path.name,
             skipped_packets,
         )
-    return sample_count / sample_rate
+    return sample_count / sample_rate, output_channels
 
 
 def _parse_whisper_segments(payload: Any) -> tuple[Segment, ...]:
@@ -450,6 +468,19 @@ def _parse_whisper_segments(payload: Any) -> tuple[Segment, ...]:
             raise InferenceError("whisper.cpp returned invalid segment fields")
         if start_ms < 0 or end_ms < start_ms:
             raise InferenceError("whisper.cpp returned invalid segment timestamps")
+        raw_speaker = item.get("speaker")
+        speaker = None
+        if raw_speaker is not None:
+            speaker = {"0": "SPEAKER_00", "1": "SPEAKER_01"}.get(str(raw_speaker))
+            if speaker is None:
+                raise InferenceError("whisper.cpp returned an invalid stereo speaker label")
         if text.strip():
-            parsed.append(Segment(start=start_ms / 1000.0, end=end_ms / 1000.0, text=text.strip()))
+            parsed.append(
+                Segment(
+                    start=start_ms / 1000.0,
+                    end=end_ms / 1000.0,
+                    text=text.strip(),
+                    speaker=speaker,
+                )
+            )
     return tuple(parsed)

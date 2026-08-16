@@ -21,7 +21,7 @@ from .postprocessing import postprocess_segments
 
 LOGGER = logging.getLogger("local_transcriber.service")
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 CALL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 SUPPORTED_EXTENSIONS = frozenset({".wav", ".mp3", ".flac", ".ogg", ".aac"})
 
@@ -264,13 +264,17 @@ def _validated_segments(segments: Any, duration_seconds: float) -> list[dict[str
                 duration_seconds,
             )
             end = duration_seconds
-        validated.append(
-            {
-                "start": round(start, 3),
-                "end": round(end, 3),
-                "text": str(segment.text),
-            }
-        )
+        speaker = getattr(segment, "speaker", None)
+        if speaker not in {None, "SPEAKER_00", "SPEAKER_01"}:
+            raise OutputValidationError("ASR returned an invalid speaker label")
+        validated_segment = {
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "text": str(segment.text),
+        }
+        if speaker is not None:
+            validated_segment["speaker"] = speaker
+        validated.append(validated_segment)
         previous_start = start
     return validated
 

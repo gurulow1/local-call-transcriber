@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_SOURCE = PROJECT_ROOT / "data" / "output" / "pilot-acceptance"
 REQUIRED_FILES = ("ATTRIBUTION.md", "manifest.json", "report.json")
 ZIP_TIMESTAMP = (2026, 8, 14, 0, 0, 0)

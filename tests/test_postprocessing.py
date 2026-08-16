@@ -93,6 +93,31 @@ class PostprocessingTests(unittest.TestCase):
             self.assertNotIn(",.", result.text)
             self.assertNotIn(":.", result.text)
 
+    def test_speaker_change_is_preserved_and_starts_a_new_utterance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            glossary = self._write_glossary(Path(temporary_dir), terms=[], phrases=[])
+
+            result = postprocess_segments(
+                [
+                    {
+                        "start": 0.0,
+                        "end": 1.0,
+                        "text": "первый канал,",
+                        "speaker": "SPEAKER_00",
+                    },
+                    {
+                        "start": 1.0,
+                        "end": 2.0,
+                        "text": "второй канал",
+                        "speaker": "SPEAKER_01",
+                    },
+                ],
+                glossary_path=glossary,
+            )
+
+            self.assertEqual(result.segments[1]["text"], "Второй канал.")
+            self.assertEqual(result.segments[1]["speaker"], "SPEAKER_01")
+
     def test_terminal_non_sentence_punctuation_becomes_a_sentence_end(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             glossary = self._write_glossary(Path(temporary_dir), terms=[], phrases=[])

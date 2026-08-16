@@ -87,9 +87,11 @@ def postprocess_segments(
     nonempty_indexes = [index for index, item in enumerate(prepared) if item[2]]
     last_nonempty_index = nonempty_indexes[-1] if nonempty_indexes else None
     capitalize_next = True
+    previous_speaker: object = None
 
     for index, (segment, raw_segment_text, cleaned_text, term_count, phrase_count) in enumerate(prepared):
-        if cleaned_text and capitalize_next:
+        speaker = segment.get("speaker")
+        if cleaned_text and (capitalize_next or (speaker is not None and speaker != previous_speaker)):
             cleaned_text = _capitalize_first_word(cleaned_text)
         had_sentence_end = _ends_sentence(cleaned_text)
         if index == last_nonempty_index:
@@ -108,6 +110,8 @@ def postprocess_segments(
             cleaned_parts.append(cleaned_text)
         term_replacements += term_count
         phrase_replacements += phrase_count
+        if speaker is not None:
+            previous_speaker = speaker
 
     return PostprocessedTranscript(
         text=" ".join(cleaned_parts),

@@ -144,6 +144,52 @@ class TranscriptionServiceTests(unittest.TestCase):
             self.assertEqual(result["segments"][0]["end"], 2.5)
             self.assertEqual(json.loads(output.read_text(encoding="utf-8")), result)
 
+    def test_stereo_speaker_label_is_published(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            source = root / "1234.wav"
+            source.write_bytes(b"placeholder")
+            output = root / "1234.json"
+
+            result = transcribe_file(
+                TranscriptionRequest(source, output, root / "models"),
+                engine=FakeEngine(
+                    result=EngineResult(
+                        duration_seconds=2.5,
+                        segments=(
+                            Segment(
+                                start=0.1,
+                                end=0.8,
+                                text="первый канал",
+                                speaker="SPEAKER_00",
+                            ),
+                        ),
+                    )
+                ),
+            )
+
+            self.assertEqual(result["segments"][0]["speaker"], "SPEAKER_00")
+
+    def test_invalid_speaker_label_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            root = Path(temporary_dir)
+            source = root / "1234.wav"
+            source.write_bytes(b"placeholder")
+            output = root / "1234.json"
+
+            result = transcribe_file(
+                TranscriptionRequest(source, output, root / "models"),
+                engine=FakeEngine(
+                    result=EngineResult(
+                        duration_seconds=2.5,
+                        segments=(Segment(0.1, 0.8, "фраза", speaker="MANAGER"),),
+                    )
+                ),
+            )
+
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["error"]["type"], "OutputValidationError")
+
     def test_duration_below_contract_precision_is_not_published_as_completed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_dir:
             root = Path(temporary_dir)

@@ -60,7 +60,12 @@ def render_transcript_markdown(
             segment_text = str(segment.get("text", "")).strip()
             if not segment_text:
                 continue
-            lines.extend(["", f"**{start} — {end}**", "", segment_text])
+            speaker = {
+                "SPEAKER_00": "Говорящий 1",
+                "SPEAKER_01": "Говорящий 2",
+            }.get(segment.get("speaker"))
+            heading = f"{speaker} · {start} — {end}" if speaker else f"{start} — {end}"
+            lines.extend(["", f"**{heading}**", "", segment_text])
 
     lines.extend(
         [
