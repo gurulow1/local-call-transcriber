@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import io
 import shutil
 import subprocess
 import sys
@@ -16,6 +18,7 @@ LINUX_LAUNCHER = PROJECT_ROOT / "Запустить транскрибатор.s
 MACOS_LAUNCHER = PROJECT_ROOT / "Запустить транскрибатор.command"
 BOOTSTRAP_PATH = PROJECT_ROOT / "scripts" / "bootstrap_runtime.py"
 PREFLIGHT_PATH = PROJECT_ROOT / "scripts" / "preflight.py"
+WHISPER_PREPARE_PATH = PROJECT_ROOT / "scripts" / "prepare_whisper_cpp.py"
 FIREWALL_PATH = PROJECT_ROOT / "security" / "windows-deny-network.ps1"
 
 
@@ -38,6 +41,27 @@ def _load_preflight():
     return module
 
 
+def _load_whisper_prepare():
+    spec = importlib.util.spec_from_file_location("prepare_whisper_cpp", WHISPER_PREPARE_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Cannot load prepare_whisper_cpp.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _DownloadResponse(io.BytesIO):
+    def __init__(self, payload: bytes, status: int) -> None:
+        super().__init__(payload)
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
 class ArchiveLauncherTests(unittest.TestCase):
     def test_primary_launchers_create_python_and_call_common_bootstrap(self) -> None:
         windows = WINDOWS_LAUNCHER.read_text(encoding="utf-8")
@@ -45,6 +69,8 @@ class ArchiveLauncherTests(unittest.TestCase):
         linux = LINUX_LAUNCHER.read_text(encoding="utf-8")
 
         self.assertIn("bootstrap_windows.ps1", windows)
+        self.assertIn("function Get-Sha256", powershell)
+        self.assertNotIn("Get-FileHash", powershell)
         self.assertIn("0953ac2ef4fbe47ad469bfa80b658a577a02c4d73a2fb9c4c7c70dda432efded", powershell)
         self.assertIn('Join-Path $StageDir "uv.exe"', powershell)
         self.assertIn('Join-Path $CacheDir "venv"', powershell)
@@ -77,6 +103,48 @@ class ArchiveLauncherTests(unittest.TestCase):
         bootstrap = _load_bootstrap()
 
         self.assertIn("numpy==1.26.4", bootstrap.CORE_PACKAGES)
+
+    def test_whisper_download_retries_after_a_stalled_request(self) -> None:
+        prepare = _load_whisper_prepare()
+        payload = b"verified runtime"
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            prepare.urllib.request,
+            "urlopen",
+            side_effect=[TimeoutError("stalled"), _DownloadResponse(payload, 200)],
+        ) as urlopen:
+            destination = Path(directory) / "runtime.zip"
+            prepare._download(
+                "https://example.invalid/runtime.zip",
+                destination,
+                len(payload),
+                hashlib.sha256(payload).hexdigest(),
+            )
+            self.assertEqual(destination.read_bytes(), payload)
+            self.assertEqual(urlopen.call_count, 2)
+            self.assertEqual(urlopen.call_args.kwargs["timeout"], prepare.DOWNLOAD_TIMEOUT_SECONDS)
+
+    def test_whisper_download_resumes_a_partial_file(self) -> None:
+        prepare = _load_whisper_prepare()
+        payload = b"verified runtime"
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "runtime.zip"
+            partial = destination.with_name(".runtime.zip.part")
+            partial.write_bytes(payload[:8])
+            with mock.patch.object(
+                prepare.urllib.request,
+                "urlopen",
+                return_value=_DownloadResponse(payload[8:], 206),
+            ) as urlopen:
+                prepare._download(
+                    "https://example.invalid/runtime.zip",
+                    destination,
+                    len(payload),
+                    hashlib.sha256(payload).hexdigest(),
+                )
+
+            request = urlopen.call_args.args[0]
+            self.assertEqual(request.headers["Range"], "bytes=8-")
+            self.assertEqual(destination.read_bytes(), payload)
 
     def test_macos_remains_an_additional_self_installing_launcher(self) -> None:
         script = MACOS_LAUNCHER.read_text(encoding="utf-8")

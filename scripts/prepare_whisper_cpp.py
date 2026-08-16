@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import os
 import shutil
 import tempfile
@@ -31,29 +32,67 @@ VAD_URL = (
 )
 VAD_SIZE = 885_098
 VAD_SHA256 = "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
+DOWNLOAD_ATTEMPTS = 4
+DOWNLOAD_TIMEOUT_SECONDS = 60
+DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 
 
 def _download(url: str, destination: Path, size: int, sha256: str) -> None:
     if destination.is_file() and destination.stat().st_size == size:
         if _sha256(destination) == sha256:
-            print(f"already verified: {destination}")
+            print(f"already verified: {destination}", flush=True)
             return
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.part")
-    with urllib.request.urlopen(url) as source, temporary.open("wb") as target:
-        copied = 0
-        while chunk := source.read(8 * 1024 * 1024):
-            target.write(chunk)
-            copied += len(chunk)
-            if copied % (256 * 1024 * 1024) < len(chunk):
-                print(f"downloaded {copied / 1024 / 1024:.0f} MiB: {destination.name}")
-    if temporary.stat().st_size != size:
-        raise SystemExit(f"size mismatch for {destination.name}")
-    actual_hash = _sha256(temporary)
-    if actual_hash != sha256:
-        raise SystemExit(f"SHA-256 mismatch for {destination.name}: {actual_hash}")
+    if temporary.is_file() and temporary.stat().st_size >= size:
+        if temporary.stat().st_size == size and _sha256(temporary) == sha256:
+            temporary.replace(destination)
+            print(f"verified: {destination}", flush=True)
+            return
+        temporary.unlink()
+
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            copied = temporary.stat().st_size if temporary.is_file() else 0
+            headers = {"User-Agent": "local-call-transcriber/0.3"}
+            if copied:
+                headers["Range"] = f"bytes={copied}-"
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(request, timeout=DOWNLOAD_TIMEOUT_SECONDS) as source:
+                status = getattr(source, "status", None)
+                if copied and status != 206:
+                    copied = 0
+                mode = "ab" if copied else "wb"
+                next_report = ((copied // (256 * 1024 * 1024)) + 1) * (256 * 1024 * 1024)
+                with temporary.open(mode) as target:
+                    while chunk := source.read(DOWNLOAD_CHUNK_SIZE):
+                        target.write(chunk)
+                        copied += len(chunk)
+                        if copied >= next_report:
+                            print(
+                                f"downloaded {copied / 1024 / 1024:.0f} MiB: {destination.name}",
+                                flush=True,
+                            )
+                            next_report += 256 * 1024 * 1024
+            if temporary.stat().st_size != size:
+                raise OSError(f"size mismatch for {destination.name}")
+            actual_hash = _sha256(temporary)
+            if actual_hash != sha256:
+                temporary.unlink()
+                raise OSError(f"SHA-256 mismatch for {destination.name}: {actual_hash}")
+            break
+        except (OSError, http.client.HTTPException) as error:
+            if attempt == DOWNLOAD_ATTEMPTS:
+                raise SystemExit(
+                    f"download failed after {DOWNLOAD_ATTEMPTS} attempts for {destination.name}: {error}"
+                ) from error
+            print(
+                f"download interrupted; retrying {destination.name} "
+                f"({attempt}/{DOWNLOAD_ATTEMPTS})...",
+                flush=True,
+            )
     temporary.replace(destination)
-    print(f"verified: {destination}")
+    print(f"verified: {destination}", flush=True)
 
 
 def _sha256(path: Path) -> str:

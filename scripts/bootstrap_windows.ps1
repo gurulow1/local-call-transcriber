@@ -1,5 +1,21 @@
 $ErrorActionPreference = "Stop"
 
+function Get-Sha256([string]$Path) {
+    $Stream = [IO.File]::OpenRead($Path)
+    try {
+        $Hasher = [Security.Cryptography.SHA256]::Create()
+        try {
+            return ([BitConverter]::ToString($Hasher.ComputeHash($Stream))).Replace("-", "").ToLowerInvariant()
+        }
+        finally {
+            $Hasher.Dispose()
+        }
+    }
+    finally {
+        $Stream.Dispose()
+    }
+}
+
 $ProjectDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location -LiteralPath $ProjectDir
 if (-not (Test-Path -LiteralPath (Join-Path $ProjectDir "worker.py"))) {
@@ -34,7 +50,7 @@ try {
     if (-not $UvReady) {
         $ArchiveReady = (Test-Path -LiteralPath $UvArchive)
         if ($ArchiveReady) {
-            $ArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $UvArchive).Hash.ToLowerInvariant()
+            $ArchiveHash = Get-Sha256 $UvArchive
             $ArchiveReady = ($ArchiveHash -eq $UvHash)
         }
         if (-not $ArchiveReady) {
@@ -45,7 +61,7 @@ try {
                 -UseBasicParsing `
                 -Uri "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-$UvTarget.zip" `
                 -OutFile $PartialArchive
-            $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $PartialArchive).Hash.ToLowerInvariant()
+            $ActualHash = Get-Sha256 $PartialArchive
             if ($ActualHash -ne $UvHash) {
                 throw "SHA-256 mismatch for uv bootstrap."
             }
@@ -85,7 +101,7 @@ try {
         }
     }
 
-    & $PythonExe scripts\bootstrap_runtime.py --uv $UvExe --profile windows-auto --prepare-only
+    & $PythonExe -u scripts\bootstrap_runtime.py --uv $UvExe --profile windows-auto --prepare-only
     if ($LASTEXITCODE -ne 0) {
         throw "Runtime preparation stopped with exit code $LASTEXITCODE."
     }
@@ -120,7 +136,7 @@ finally {
 
 # Keep the long-running worker outside setup.log so the installation transcript
 # remains bounded and useful for diagnostics.
-& $PythonExe scripts\bootstrap_runtime.py --uv $UvExe --profile windows-auto --run-only
+& $PythonExe -u scripts\bootstrap_runtime.py --uv $UvExe --profile windows-auto --run-only
 if ($LASTEXITCODE -ne 0) {
     throw "Transcriber stopped with exit code $LASTEXITCODE."
 }
